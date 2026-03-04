@@ -1,3 +1,4 @@
+
     const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
     const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
@@ -20,6 +21,7 @@
     let paginaAtual = 1;
     const ITENS_POR_PAGINA = 10;
     let nickPrincipal = '';
+    let subscriptionPendentes = null;
 
     async function pegarUsernameForum() {
         try {
@@ -91,6 +93,7 @@
             
             await carregarPropostas();
             await carregarLogs();
+            iniciarRealtimePendentes();
             
             const firstNick = document.querySelector('.nick-input');
             if (firstNick) {
@@ -110,23 +113,41 @@
     }
 
     function verificarPermissoesUI() {
-        const botoesLideranca = [
-            document.getElementById('btnPendentes'),
-            document.querySelector('[onclick="toggleAtualizacao()"]'),
-            document.querySelector('[onclick="toggleLog()"]')
-        ];
-
-        botoesLideranca.forEach(btn => {
-            if (btn) btn.style.display = usuarioAtual.podeAdministrar ? 'inline-flex' : 'none';
-        });
-
-        const badge = document.getElementById('badgePendentes');
-        if (badge && !usuarioAtual.podeAdministrar) {
-            badge.style.display = 'none';
+        const btnPendentes = document.getElementById('btnPendentes');
+        if (btnPendentes) {
+            btnPendentes.style.display = usuarioAtual.podeAdministrar ? 'inline-flex' : 'none';
         }
 
-        const btnCriar = document.querySelector('[onclick="toggleForm()"]');
-        if (btnCriar) btnCriar.style.display = 'inline-flex';
+        const btnAtualizar = document.querySelector('button[onclick="toggleAtualizacao()"]');
+        if (btnAtualizar) {
+            btnAtualizar.style.display = usuarioAtual.podeAdministrar ? 'inline-flex' : 'none';
+        }
+
+        const btnLog = document.querySelector('button[onclick="toggleLog()"]');
+        if (btnLog) {
+            btnLog.style.display = usuarioAtual.podeAdministrar ? 'inline-flex' : 'none';
+        }
+
+        const badge = document.getElementById('badgePendentes');
+        if (badge) {
+            badge.style.display = (usuarioAtual.podeAdministrar && parseInt(badge.textContent) > 0) ? 'block' : 'none';
+        }
+
+        const btnCriar = document.querySelector('button[onclick="toggleForm()"]');
+        if (btnCriar) {
+            btnCriar.style.display = 'inline-flex';
+        }
+
+        if (!usuarioAtual.podeAdministrar) {
+            const pendentesPanel = document.getElementById('pendentesPanel');
+            if (pendentesPanel) pendentesPanel.classList.remove('active');
+            
+            const atualizacaoPanel = document.getElementById('atualizacaoPanel');
+            if (atualizacaoPanel) atualizacaoPanel.classList.remove('active');
+            
+            const logPanel = document.getElementById('logPanel');
+            if (logPanel) logPanel.classList.remove('active');
+        }
     }
 
     async function carregarPropostas() {
@@ -249,7 +270,7 @@
                 tema: proposta.tema,
                 descricao: proposta.descricao,
                 bbcode: proposta.bbcode || '',
-                veredito: proposta.veredito || 'Pendente',
+                veredito: 'Pendente',
                 data: proposta.data,
                 criadoPor: usuarioAtual.nick
             };
@@ -259,13 +280,14 @@
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(dados)
+                body: JSON.stringify(dados),
+                mode: 'no-cors'
             });
 
-            const resultado = await response.json();
-            return resultado;
+            return { sucesso: true };
             
         } catch (err) {
+            console.error('Erro ao enviar para planilha:', err);
             return { sucesso: false, erro: err.message };
         }
     }
@@ -409,10 +431,14 @@ ${bbcodeSpoiler}`;
         };
 
         try {
+            showToast('Enviando', 'Salvando proposta...', 'info');
+            
             await salvarPropostaSupabase(novaProposta);
             
+            showToast('Enviando', 'Enviando para planilha...', 'info');
             await enviarParaPlanilha(novaProposta);
             
+            showToast('Enviando', 'Postando no fórum...', 'info');
             const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
             const mensagemForum = gerarBBCodeForum(novaProposta);
             await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
@@ -437,6 +463,7 @@ ${bbcodeSpoiler}`;
             showToast('Sucesso', 'Proposta enviada e postada no fórum!', 'success');
             
         } catch (err) {
+            console.error('Erro ao enviar proposta:', err);
             showToast('Erro', 'Falha ao enviar proposta: ' + err.message, 'error');
         }
     }
@@ -570,6 +597,29 @@ ${bbcodeSpoiler}`;
         }
     }
 
+    function iniciarRealtimePendentes() {
+        if (!usuarioAtual.podeAdministrar) return;
+        
+        subscriptionPendentes = supabaseClient
+            .channel('propostas-pendentes')
+            .on('postgres_changes', 
+                { 
+                    event: '*', 
+                    schema: 'public', 
+                    table: 'propostas_ouvidoria',
+                    filter: 'veredito=eq.Pendente'
+                }, 
+                (payload) => {
+                    console.log('Mudança detectada:', payload);
+                    carregarPropostas();
+                    if (document.getElementById('pendentesPanel').classList.contains('active')) {
+                        renderizarPendentes();
+                    }
+                }
+            )
+            .subscribe();
+    }
+
     function renderizarPendentes() {
         const container = document.getElementById('pendentesList');
         const countEl = document.getElementById('pendentesCount');
@@ -598,10 +648,9 @@ ${bbcodeSpoiler}`;
                                  onerror="this.src='https://www.habbo.com.br/habbo-imaging/avatarimage?user=habbo&headonly=0&size=b'">
                         </div>
                         <div class="pendente-detalhes">
-                            <div class="pendente-tema">${p.tema}</div>
+                            <div class="pendente-tema">Ordem #${p.ordem}</div>
                             <div class="pendente-meta">
-                                <span><i class="fa-solid fa-hashtag"></i> ${p.ordem}</span>
-                                <span><i class="fa-solid fa-user"></i> ${p.nick.split(',').length} autor(es)</span>
+                                <span><i class="fa-solid fa-user"></i> ${p.nick}</span>
                             </div>
                         </div>
                     </div>
@@ -623,11 +672,11 @@ ${bbcodeSpoiler}`;
 
     function atualizarBadgePendentes() {
         const badge = document.getElementById('badgePendentes');
-        if (!badge || !usuarioAtual.podeAdministrar) return;
+        if (!badge) return;
         
         const count = propostas.filter(p => p.veredito === 'Pendente' && !p.isAtualizacaoSimples).length;
         badge.textContent = count;
-        badge.style.display = count > 0 ? 'block' : 'none';
+        badge.style.display = (usuarioAtual.podeAdministrar && count > 0) ? 'block' : 'none';
     }
 
     function toggleLog() {
@@ -668,10 +717,6 @@ ${bbcodeSpoiler}`;
                 case 'ALTERAR_VEREDITO':
                     iconClass = 'veredito';
                     icon = 'fa-gavel';
-                    break;
-                case 'ADICIONAR_COMENTARIO':
-                    iconClass = 'comment';
-                    icon = 'fa-comment';
                     break;
                 case 'ATUALIZACAO_OUVIDORIA':
                     iconClass = 'update';
@@ -821,9 +866,7 @@ ${bbcodeSpoiler}`;
             });
         }
         
-        return lista.sort((a, b) => {
-            return new Date(b.data) - new Date(a.data);
-        });
+        return lista.sort((a, b) => new Date(b.data) - new Date(a.data));
     }
 
     function renderizarPaginacao(totalItens) {
