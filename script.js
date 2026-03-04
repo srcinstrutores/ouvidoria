@@ -1,25 +1,11 @@
-    // ==========================================
-    // CONFIGURAÇÃO - MUDE AQUI AS URLs
-    // ==========================================
-    
-    // SUPABASE (mesmo de antes)
     const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
-    
-    // ⬇️⬇️⬇️ URL DO APPSCRIPT DE MEMBROS (JÁ EXISTE, NÃO MUDA)
     const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
-    
-    // ⬇️⬇️⬇️ URL DO NOVO APPSCRIPT DE PROPOSTAS (COLE AQUI DEPOIS DE PUBLICAR)
     const URL_PROPOSTAS = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
-    
-    // ID do tópico do fórum
     const ID_TOPICO_FORUM = '1';
 
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // ==========================================
-    // ESTADO DO USUÁRIO
-    // ==========================================
     let usuarioAtual = {
         nick: '',
         cargo: '',
@@ -27,7 +13,6 @@
         podeAdministrar: false
     };
 
-    // Dados em memória
     let propostas = [];
     let logAcoes = [];
     let tipoSelecionado = 'Projeto';
@@ -36,10 +21,6 @@
     const ITENS_POR_PAGINA = 10;
     let nickPrincipal = '';
 
-    // ==========================================
-    // FUNÇÕES DE AUTENTICAÇÃO E PERMISSÕES
-    // ==========================================
-    
     async function pegarUsernameForum() {
         try {
             const resposta = await fetch("/forum");
@@ -54,7 +35,6 @@
             }
             throw new Error('Não autenticado no fórum');
         } catch (err) {
-            console.error("Erro ao buscar username:", err);
             const fallback = localStorage.getItem("forumUser");
             if (fallback) return fallback;
             showToast('Erro', 'Você precisa estar logado no fórum', 'error');
@@ -64,7 +44,7 @@
 
     async function buscarCargoPlanilha(nick) {
         try {
-            const response = await fetch(URL_MEMBROS); // ⬅️ USA URL_MEMBROS
+            const response = await fetch(URL_MEMBROS);
             const dados = await response.json();
             const listaUsuarios = dados.membros || [];
             
@@ -82,7 +62,6 @@
                 cargoOriginal: usuario.cargoOriginal
             };
         } catch (err) {
-            console.error("Erro ao buscar cargo:", err);
             return { nick: nick, cargo: 'membro', cargoOriginal: 'Membro' };
         }
     }
@@ -108,28 +87,22 @@
                 podeAdministrar: isLideranca
             };
 
-            // Atualizar UI baseado nas permissões
             verificarPermissoesUI();
             
-            // Carregar dados do Supabase
             await carregarPropostas();
             await carregarLogs();
             
-            // Preencher nick no formulário
             const firstNick = document.querySelector('.nick-input');
             if (firstNick) {
                 firstNick.value = nick;
                 atualizarNickPrincipal(nick);
             }
             
-            // Preencher nick na atualização
             document.getElementById('atualizacaoNick').value = nick;
 
             showToast('Bem-vindo', `${nick} - ${dadosPlanilha.cargoOriginal}`, 'success');
             
         } catch (err) {
-            console.error("Erro na inicialização:", err);
-            // Modo visitante - só pode ver
             usuarioAtual = { nick: 'Visitante', cargo: 'Visitante', isLideranca: false, podeAdministrar: false };
             verificarPermissoesUI();
             await carregarPropostas();
@@ -137,7 +110,6 @@
     }
 
     function verificarPermissoesUI() {
-        // Botões só para liderança
         const botoesLideranca = [
             document.getElementById('btnPendentes'),
             document.querySelector('[onclick="toggleAtualizacao()"]'),
@@ -148,21 +120,15 @@
             if (btn) btn.style.display = usuarioAtual.podeAdministrar ? 'inline-flex' : 'none';
         });
 
-        // Badge de pendentes só para liderança
         const badge = document.getElementById('badgePendentes');
         if (badge && !usuarioAtual.podeAdministrar) {
             badge.style.display = 'none';
         }
 
-        // Botão de criar proposta disponível para TODOS
         const btnCriar = document.querySelector('[onclick="toggleForm()"]');
         if (btnCriar) btnCriar.style.display = 'inline-flex';
     }
 
-    // ==========================================
-    // SUPABASE - PROPOSTAS
-    // ==========================================
-    
     async function carregarPropostas() {
         try {
             const { data, error } = await supabaseClient
@@ -175,24 +141,17 @@
             propostas = (data || []).map(p => ({
                 id: p.id,
                 nick: p.nick,
-                tipo: p.tipo,
                 ordem: p.ordem,
-                tema: p.tema,
-                descricao: p.descricao,
-                descricaoFormatada: p.descricao,
-                bbcode: p.bbcode || '',
-                data: formatarDataISO(p.created_at),
                 veredito: p.veredito || 'Pendente',
-                comentarios: p.comentarios || [],
                 isAtualizacaoSimples: p.is_atualizacao || false,
-                tagAtualizacao: p.tag_atualizacao || ''
+                tagAtualizacao: p.tag_atualizacao || '',
+                data: formatarDataISO(p.created_at)
             }));
 
             atualizarBadgePendentes();
             renderizarPropostas();
             
         } catch (err) {
-            console.error('Erro ao carregar propostas:', err);
             showToast('Erro', 'Falha ao carregar propostas', 'error');
         }
     }
@@ -203,16 +162,10 @@
                 .from('propostas_ouvidoria')
                 .insert([{
                     nick: proposta.nick,
-                    tipo: proposta.tipo,
                     ordem: proposta.ordem,
-                    tema: proposta.tema,
-                    descricao: proposta.descricao,
-                    bbcode: proposta.bbcode || '',
                     veredito: 'Pendente',
                     is_atualizacao: proposta.isAtualizacaoSimples || false,
-                    tag_atualizacao: proposta.tagAtualizacao || null,
-                    comentarios: [],
-                    criado_por: usuarioAtual.nick
+                    tag_atualizacao: proposta.tagAtualizacao || null
                 }])
                 .select();
 
@@ -220,7 +173,6 @@
             return data[0];
             
         } catch (err) {
-            console.error('Erro ao salvar no Supabase:', err);
             throw err;
         }
     }
@@ -229,53 +181,18 @@
         try {
             const { error } = await supabaseClient
                 .from('propostas_ouvidoria')
-                .update({ veredito: novoVeredito, updated_at: new Date().toISOString() })
+                .update({ veredito: novoVeredito })
                 .eq('id', id);
 
             if (error) throw error;
             
-            // Registrar log
             await inserirLog('ALTERAR_VEREDITO', `Alterou veredito para ${novoVeredito}`, id);
             
         } catch (err) {
-            console.error('Erro ao atualizar veredito:', err);
             throw err;
         }
     }
 
-    async function adicionarComentarioSupabase(id, comentario) {
-        try {
-            // Primeiro busca a proposta atual
-            const { data: proposta, error: fetchError } = await supabaseClient
-                .from('propostas_ouvidoria')
-                .select('comentarios')
-                .eq('id', id)
-                .single();
-
-            if (fetchError) throw fetchError;
-
-            const comentarios = proposta.comentarios || [];
-            comentarios.push(comentario);
-
-            const { error } = await supabaseClient
-                .from('propostas_ouvidoria')
-                .update({ comentarios: comentarios, updated_at: new Date().toISOString() })
-                .eq('id', id);
-
-            if (error) throw error;
-            
-            await inserirLog('ADICIONAR_COMENTARIO', 'Adicionou comentário', id);
-            
-        } catch (err) {
-            console.error('Erro ao adicionar comentário:', err);
-            throw err;
-        }
-    }
-
-    // ==========================================
-    // SUPABASE - LOGS
-    // ==========================================
-    
     async function inserirLog(acao, detalhes, propostaId = null) {
         try {
             await supabaseClient
@@ -322,10 +239,6 @@
         }
     }
 
-    // ==========================================
-    // PLANILHA - ENVIO DE DADOS
-    // ==========================================
-    
     async function enviarParaPlanilha(proposta) {
         try {
             const dados = {
@@ -341,7 +254,7 @@
                 criadoPor: usuarioAtual.nick
             };
 
-            const response = await fetch(URL_PROPOSTAS, { // ⬅️ USA URL_PROPOSTAS
+            const response = await fetch(URL_PROPOSTAS, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -353,15 +266,10 @@
             return resultado;
             
         } catch (err) {
-            console.error('Erro ao enviar para planilha:', err);
             return { sucesso: false, erro: err.message };
         }
     }
 
-    // ==========================================
-    // FÓRUM - POSTAGEM
-    // ==========================================
-    
     async function postarNoForum(idTopico, titulo, mensagem) {
         return new Promise((resolve, reject) => {
             function fazerPostagem() {
@@ -412,10 +320,6 @@ ${checkboxProjeto} Projeto ${checkboxSugestao} Sugestão ${checkboxAlteracao} Al
 ${bbcodeSpoiler}`;
     }
 
-    // ==========================================
-    // FUNÇÕES DE FORMULÁRIO
-    // ==========================================
-    
     function toggleForm() {
         const form = document.getElementById('formContainer');
         form.classList.toggle('active');
@@ -501,23 +405,18 @@ ${bbcodeSpoiler}`;
             bbcode: bbcode || '',
             data: formatarData(),
             veredito: 'Pendente',
-            comentarios: [],
             isAtualizacaoSimples: false
         };
 
         try {
-            // 1. Salvar no Supabase
             await salvarPropostaSupabase(novaProposta);
             
-            // 2. Enviar para Planilha
             await enviarParaPlanilha(novaProposta);
             
-            // 3. Postar no Fórum
             const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
             const mensagemForum = gerarBBCodeForum(novaProposta);
             await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
             
-            // 4. Limpar e atualizar
             document.getElementById('nicksContainer').innerHTML = `
                 <div class="nick-row">
                     <div class="nick-input-wrapper">
@@ -538,15 +437,10 @@ ${bbcodeSpoiler}`;
             showToast('Sucesso', 'Proposta enviada e postada no fórum!', 'success');
             
         } catch (err) {
-            console.error('Erro ao enviar proposta:', err);
             showToast('Erro', 'Falha ao enviar proposta: ' + err.message, 'error');
         }
     }
 
-    // ==========================================
-    // ATUALIZAÇÃO DA OUVIDORIA (SÓ LIDERANÇA)
-    // ==========================================
-    
     function toggleAtualizacao() {
         if (!usuarioAtual.podeAdministrar) {
             showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem atualizar a ouvidoria', 'error');
@@ -588,16 +482,13 @@ ${bbcodeSpoiler}`;
             bbcode: '',
             data: formatarData(),
             veredito: 'Atualização',
-            comentarios: [],
             isAtualizacaoSimples: true,
             tagAtualizacao: tag
         };
 
         try {
-            // Salvar no Supabase
             await salvarPropostaSupabase(atualizacaoSimples);
             
-            // Postar no fórum
             const bbcode = `[center][table bgcolor="005fb2" style="border-radius: 14px; overflow: hidden; width: 80%; box-shadow: 0 1px 2px #f233be;"][tr][td][color=#f8f8ff][img(45px,45px)]https://www.habbo.com.br/habbo-imaging/badge/b09064s43084s50134eda71d18c813ca341e7e285475586bf5.gif[/img]
 
 [size=13][font=Poppins][b][SRC] Atualização realizada! ${tag}[/size]
@@ -614,15 +505,10 @@ ${bbcodeSpoiler}`;
             showToast('Sucesso', 'Atualização postada!', 'success');
             
         } catch (err) {
-            console.error('Erro:', err);
             showToast('Erro', 'Falha ao postar atualização', 'error');
         }
     }
 
-    // ==========================================
-    // VEREDITO (SÓ LIDERANÇA)
-    // ==========================================
-    
     async function alterarVeredito(id, novoVeredito) {
         if (!usuarioAtual.podeAdministrar) {
             showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
@@ -633,7 +519,6 @@ ${bbcodeSpoiler}`;
         if (!proposta) return;
 
         try {
-            const vereditoAnterior = proposta.veredito;
             await atualizarVereditoSupabase(id, novoVeredito);
             
             proposta.veredito = novoVeredito;
@@ -672,10 +557,6 @@ ${bbcodeSpoiler}`;
         if (dropdown) dropdown.classList.remove('active');
     }
 
-    // ==========================================
-    // PENDENTES (SÓ LIDERANÇA)
-    // ==========================================
-    
     function togglePendentes() {
         if (!usuarioAtual.podeAdministrar) {
             showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver pendentes', 'error');
@@ -749,10 +630,6 @@ ${bbcodeSpoiler}`;
         badge.style.display = count > 0 ? 'block' : 'none';
     }
 
-    // ==========================================
-    // LOG (SÓ LIDERANÇA)
-    // ==========================================
-    
     function toggleLog() {
         if (!usuarioAtual.podeAdministrar) {
             showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver o log', 'error');
@@ -820,66 +697,6 @@ ${bbcodeSpoiler}`;
         }).join('');
     }
 
-    // ==========================================
-    // COMENTÁRIOS
-    // ==========================================
-    
-    function toggleComentarioInput(propostaId) {
-        if (!usuarioAtual.podeAdministrar) {
-            showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem comentar', 'error');
-            return;
-        }
-        
-        const inputArea = document.getElementById(`comentario-area-${propostaId}`);
-        inputArea.classList.toggle('active');
-        if (inputArea.classList.contains('active')) {
-            setTimeout(() => {
-                document.getElementById(`comentario-input-${propostaId}`).focus();
-            }, 100);
-        }
-    }
-
-    async function adicionarComentario(propostaId) {
-        if (!usuarioAtual.podeAdministrar) {
-            showToast('Acesso Negado', 'Sem permissão para comentar', 'error');
-            return;
-        }
-
-        const input = document.getElementById(`comentario-input-${propostaId}`);
-        const texto = input.value.trim();
-        
-        if (!texto) {
-            showToast('Erro', 'Digite um comentário', 'error');
-            return;
-        }
-
-        const comentario = {
-            tag: usuarioAtual.cargo,
-            nick: usuarioAtual.nick,
-            texto: texto,
-            data: formatarData()
-        };
-
-        try {
-            await adicionarComentarioSupabase(propostaId, comentario);
-            
-            const proposta = propostas.find(p => p.id === propostaId);
-            if (proposta) {
-                proposta.comentarios.push(comentario);
-            }
-            
-            showToast('Sucesso', 'Comentário adicionado!', 'success');
-            renderizarPropostas();
-            
-        } catch (err) {
-            showToast('Erro', 'Falha ao adicionar comentário', 'error');
-        }
-    }
-
-    // ==========================================
-    // RENDERIZAÇÃO
-    // ==========================================
-    
     function renderizarPropostas() {
         const container = document.getElementById('propostasList');
         const countEl = document.getElementById('countPropostas');
@@ -915,7 +732,6 @@ ${bbcodeSpoiler}`;
         }
 
         container.innerHTML = lista.map(p => {
-            // Se for atualização simples
             if (p.isAtualizacaoSimples) {
                 return `
                     <div class="atualizacao-item-simples">
@@ -931,11 +747,8 @@ ${bbcodeSpoiler}`;
                 `;
             }
 
-            // Proposta normal
             const avataresHTML = gerarAvataresHTML(p.nick, p.id);
-            const temComentarios = p.comentarios && p.comentarios.length > 0;
             
-            // Veredito dropdown (só visual para não-liderança, funcional para liderança)
             const vereditoDropdownHTML = usuarioAtual.podeAdministrar ? `
                 <div class="veredito-dropdown" data-proposta-id="${p.id}">
                     <div class="veredito-trigger" onclick="toggleVereditoDropdown(event, ${p.id})">
@@ -973,11 +786,10 @@ ${bbcodeSpoiler}`;
                             <div class="proposta-nick">${p.nick}</div>
                             <div class="proposta-meta">
                                 <span><i class="fa-regular fa-clock"></i> ${p.data}</span>
-                                <span class="proposta-tipo ${getTipoClass(p.tipo)}">
-                                    <i class="fa-solid ${getTipoIcon(p.tipo)}"></i> ${p.tipo}
+                                <span class="proposta-tipo tipo-projeto">
+                                    <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
                                 </span>
                             </div>
-                            <div class="proposta-tema">${p.tema}</div>
                             <div class="proposta-status">
                                 ${vereditoDropdownHTML}
                             </div>
@@ -986,109 +798,11 @@ ${bbcodeSpoiler}`;
                             <i class="fa-solid fa-chevron-down"></i>
                         </button>
                     </div>
-                    <div class="proposta-content">
-                        <div class="proposta-detalhes-externo">
-                            <div class="detalhe-item-externo">
-                                <span class="detalhe-label-externo">Ordem</span>
-                                <span class="detalhe-valor-externo">#${p.ordem}</span>
-                            </div>
-                            <div class="detalhe-item-externo">
-                                <span class="detalhe-label-externo">Tipo</span>
-                                <span class="detalhe-valor-externo">${p.tipo}</span>
-                            </div>
-                            <div class="detalhe-item-externo">
-                                <span class="detalhe-label-externo">Autor(es)</span>
-                                <span class="detalhe-valor-externo">${p.nick.split(',').length}</span>
-                            </div>
-                        </div>
-                        
-                        <div class="proposta-bbcode">
-                            <div class="descricao-label">
-                                <i class="fa-solid fa-align-left"></i> Descrição
-                            </div>
-                            <div class="descricao-formatada">
-                                ${p.descricaoFormatada || p.descricao}
-                            </div>
-                        </div>
-
-                        ${p.bbcode ? `
-                        <div class="proposta-bbcode">
-                            <div class="code-viewer">
-                                <div class="code-header">
-                                    <div class="code-header-left">
-                                        <div class="code-dots">
-                                            <div class="code-dot red"></div>
-                                            <div class="code-dot yellow"></div>
-                                            <div class="code-dot green"></div>
-                                        </div>
-                                        <span class="code-title">bbcode.txt</span>
-                                    </div>
-                                    <div class="code-actions">
-                                        <button class="code-btn" onclick="copyCode(${p.id})">
-                                            <i class="fa-regular fa-copy"></i> Copiar
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="code-body">
-                                    <div class="code-content">${highlightBBCode(p.bbcode)}</div>
-                                </div>
-                            </div>
-                        </div>
-                        ` : ''}
-
-                        <div class="comentarios-section">
-                            <div class="comentarios-header">
-                                <i class="fa-solid fa-comments"></i> Comentários (${p.comentarios.length})
-                            </div>
-                            
-                            ${temComentarios ? `
-                            <div class="comentarios-list">
-                                ${p.comentarios.map(c => `
-                                    <div class="comentario-item">
-                                        <div class="comentario-avatar">
-                                            <img src="https://www.habbo.com.br/habbo-imaging/avatarimage?user=${encodeURIComponent(c.nick)}&headonly=0&size=b&gesture=sml&direction=2&head_direction=2" 
-                                                 alt="${c.nick}">
-                                        </div>
-                                        <div class="comentario-content">
-                                            <div class="comentario-header">
-                                                <span class="comentario-tag">${c.tag}</span>
-                                                <span class="comentario-nick">${c.nick}</span>
-                                                <span class="comentario-data">${c.data}</span>
-                                            </div>
-                                            <div class="comentario-texto">${c.texto}</div>
-                                        </div>
-                                    </div>
-                                `).join('')}
-                            </div>
-                            ` : '<p style="color: var(--text-tertiary); font-size: 13px; margin-bottom: 16px;">Nenhum comentário ainda.</p>'}
-                            
-                            ${usuarioAtual.podeAdministrar ? `
-                            <div class="comentario-input-area" id="comentario-area-${p.id}">
-                                <textarea class="comentario-input" id="comentario-input-${p.id}" placeholder="Adicione um comentário..."></textarea>
-                                <button class="btn btn-primary btn-sm" onclick="adicionarComentario(${p.id})">
-                                    <i class="fa-solid fa-paper-plane"></i> Enviar Comentário
-                                </button>
-                            </div>
-                            ` : ''}
-                        </div>
-                    </div>
-
-                    ${usuarioAtual.podeAdministrar ? `
-                    <div class="proposta-actions-sutis">
-                        <button class="btn-sutil comentario" onclick="toggleComentarioInput(${p.id})">
-                            <i class="fa-solid fa-comment"></i> Comentar
-                        </button>
-                    </div>
-                    ` : ''}
                 </div>
             `;
         }).join('');
     }
 
-    // ==========================================
-    // FUNÇÕES AUXILIARES
-    // ==========================================
-    
     function obterPropostasFiltradas() {
         let lista = [...propostas];
         
@@ -1099,21 +813,16 @@ ${bbcodeSpoiler}`;
         } else if (abaAtual === 'pesquisar') {
             const nick = document.getElementById('searchNick')?.value.toLowerCase() || '';
             const ordem = document.getElementById('searchOrdem')?.value.toLowerCase() || '';
-            const tema = document.getElementById('searchTema')?.value.toLowerCase() || '';
             
             lista = lista.filter(p => {
                 const matchNick = !nick || p.nick.toLowerCase().includes(nick);
                 const matchOrdem = !ordem || p.ordem.toLowerCase().includes(ordem);
-                const matchTema = !tema || p.tema.toLowerCase().includes(tema);
-                return matchNick && matchOrdem && matchTema;
+                return matchNick && matchOrdem;
             });
         }
         
         return lista.sort((a, b) => {
-            // Atualizações primeiro, depois por ordem decrescente
-            if (a.isAtualizacaoSimples && !b.isAtualizacaoSimples) return -1;
-            if (!a.isAtualizacaoSimples && b.isAtualizacaoSimples) return 1;
-            return parseInt(b.ordem) - parseInt(a.ordem);
+            return new Date(b.data) - new Date(a.data);
         });
     }
 
@@ -1236,7 +945,7 @@ ${bbcodeSpoiler}`;
         const nicks = nicksString.split(',').map(n => n.trim()).filter(n => n);
         const proposta = propostas.find(p => p.id === propostaId);
         
-        modalTitle.textContent = `Autores - ${proposta ? proposta.tema : 'Proposta'}`;
+        modalTitle.textContent = `Autores - Ordem #${proposta ? proposta.ordem : ''}`;
         modalCount.innerHTML = `<strong>${nicks.length}</strong> autor${nicks.length !== 1 ? 'es' : ''}`;
         
         let html = '<div class="autores-grid">';
@@ -1270,36 +979,6 @@ ${bbcodeSpoiler}`;
         });
     }
 
-    async function copyCode(id) {
-        const proposta = propostas.find(p => p.id === id);
-        if (!proposta || !proposta.bbcode) return;
-        
-        try {
-            await navigator.clipboard.writeText(proposta.bbcode);
-            showToast('Sucesso', 'BBCode copiado!', 'success');
-        } catch (err) {
-            showToast('Erro', 'Não foi possível copiar', 'error');
-        }
-    }
-
-    function highlightBBCode(code) {
-        if (!code) return '';
-        return code
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
-    }
-
-    function getTipoClass(tipo) {
-        const map = { 'Projeto': 'tipo-projeto', 'Sugestão': 'tipo-sugestao', 'Correção/Alteração': 'tipo-correcao' };
-        return map[tipo] || 'tipo-projeto';
-    }
-
-    function getTipoIcon(tipo) {
-        const map = { 'Projeto': 'fa-lightbulb', 'Sugestão': 'fa-star', 'Correção/Alteração': 'fa-pen-to-square' };
-        return map[tipo] || 'fa-lightbulb';
-    }
-
     function formatarData() {
         const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
         const dias = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -1310,7 +989,9 @@ ${bbcodeSpoiler}`;
     function formatarDataISO(isoString) {
         if (!isoString) return formatarData();
         const data = new Date(isoString);
-        return formatarData.call({ getDate: () => data });
+        const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+        const dias = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        return `${dias[data.getDay()]} ${meses[data.getMonth()]} ${data.getDate()}, ${data.getFullYear()} ${data.getHours().toString().padStart(2, '0')}:${data.getMinutes().toString().padStart(2, '0')}`;
     }
 
     function showToast(titulo, mensagem, tipo = 'success') {
@@ -1349,7 +1030,6 @@ ${bbcodeSpoiler}`;
         }
     }
 
-    // Toolbar functions
     function formatText(command) {
         const textarea = document.getElementById('descricaoInput');
         const start = textarea.selectionStart;
@@ -1432,7 +1112,6 @@ ${bbcodeSpoiler}`;
         textarea.focus();
     }
 
-    // Event listeners
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             fecharModalAutores();
@@ -1446,7 +1125,6 @@ ${bbcodeSpoiler}`;
         }
     });
 
-    // Inicialização
     document.addEventListener('DOMContentLoaded', () => {
         const temaSalvo = localStorage.getItem('tema');
         if (temaSalvo) {
