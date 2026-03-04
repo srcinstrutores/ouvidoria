@@ -1,10 +1,19 @@
     // ==========================================
-    // CONFIGURAÇÃO
+    // CONFIGURAÇÃO - MUDE AQUI AS URLs
     // ==========================================
-    const SUPABASE_URL = 'https://xxdrgnmlewxvefkgkaor.supabase.co';
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4ZHJnbm1sZXd4dmVma2drYW9yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMDU5NzQsImV4cCI6MjA4NjY4MTk3NH0.sof_2qNiTke-z4kWypQc6lokVoGmwhM9WRx5cBt8Ai4';
-    const PLANILHA_URL = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
-    const ID_TOPICO_FORUM = '39296'; // Ajuste para o ID do tópico da ouvidoria
+    
+    // SUPABASE (mesmo de antes)
+    const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
+    
+    // ⬇️⬇️⬇️ URL DO APPSCRIPT DE MEMBROS (JÁ EXISTE, NÃO MUDA)
+    const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
+    
+    // ⬇️⬇️⬇️ URL DO NOVO APPSCRIPT DE PROPOSTAS (COLE AQUI DEPOIS DE PUBLICAR)
+    const URL_PROPOSTAS = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
+    
+    // ID do tópico do fórum
+    const ID_TOPICO_FORUM = '39296';
 
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -55,7 +64,7 @@
 
     async function buscarCargoPlanilha(nick) {
         try {
-            const response = await fetch(PLANILHA_URL);
+            const response = await fetch(URL_MEMBROS); // ⬅️ USA URL_MEMBROS
             const dados = await response.json();
             const listaUsuarios = dados.membros || [];
             
@@ -332,7 +341,7 @@
                 criadoPor: usuarioAtual.nick
             };
 
-            const response = await fetch(PLANILHA_URL, {
+            const response = await fetch(URL_PROPOSTAS, { // ⬅️ USA URL_PROPOSTAS
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -345,7 +354,6 @@
             
         } catch (err) {
             console.error('Erro ao enviar para planilha:', err);
-            // Não impede o fluxo se falhar
             return { sucesso: false, erro: err.message };
         }
     }
