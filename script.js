@@ -13,7 +13,7 @@
     const URL_PROPOSTAS = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
     
     // ID do tópico do fórum
-    const ID_TOPICO_FORUM = '39296';
+    const ID_TOPICO_FORUM = '1';
 
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
