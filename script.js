@@ -176,15 +176,20 @@ async function carregarPropostas() {
 
 async function salvarPropostaSupabase(proposta) {
     try {
+        const dadosSupabase = {
+            nick: proposta.nick,
+            ordem: proposta.ordem,
+            veredito: 'Pendente'
+        };
+        
+        if (proposta.isAtualizacaoSimples) {
+            dadosSupabase.is_atualizacao = true;
+            dadosSupabase.tag_atualizacao = proposta.tagAtualizacao;
+        }
+
         const { data, error } = await supabaseClient
             .from('propostas_ouvidoria')
-            .insert([{
-                nick: proposta.nick,
-                ordem: proposta.ordem,
-                veredito: 'Pendente',
-                is_atualizacao: proposta.isAtualizacaoSimples || false,
-                tag_atualizacao: proposta.tagAtualizacao || null
-            }])
+            .insert([dadosSupabase])
             .select();
 
         if (error) throw error;
