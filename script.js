@@ -14,6 +14,7 @@ let usuarioAtual = {
 };
 
 let propostas = [];
+let propostasPlanilha = []; // NOVO: Array para dados da planilha
 let logAcoes = [];
 let tipoSelecionado = 'Projeto';
 let abaAtual = 'todos';
@@ -89,17 +90,15 @@ async function inicializarSistema() {
             podeAdministrar: isLideranca
         };
 
-        // CHAMA ANTES DE TUDO
         verificarPermissoesUI();
         
-        // Aguarda um tick para garantir remoção do DOM
         await new Promise(resolve => setTimeout(resolve, 0));
         
+        // CARREGA AMBOS: Supabase e Planilha
         await carregarPropostas();
         await carregarLogs();
         iniciarRealtimePendentes();
         
-        // Preenche formulários
         const firstNick = document.querySelector('.nick-input');
         if (firstNick) {
             firstNick.value = nick;
@@ -113,13 +112,12 @@ async function inicializarSistema() {
         
     } catch (err) {
         usuarioAtual = { nick: 'Visitante', cargo: 'Visitante', isLideranca: false, podeAdministrar: false };
-        verificarPermissoesUI(); // Remove botões também em caso de erro
+        verificarPermissoesUI();
         await carregarPropostas();
     }
 }
 
 function verificarPermissoesUI() {
-    // Remove elementos imediatamente
     const elementosParaRemover = [
         '#btnPendentes',
         'button[onclick="toggleAtualizacao()"]',
@@ -137,7 +135,6 @@ function verificarPermissoesUI() {
         }
     });
 
-    // Esconde dropdowns de veredito se não for admin
     if (!usuarioAtual.podeAdministrar) {
         document.querySelectorAll('.veredito-dropdown').forEach(el => {
             el.style.display = 'none';
@@ -145,30 +142,85 @@ function verificarPermissoesUI() {
     }
 }
 
+// NOVA FUNÇÃO: Buscar propostas da planilha Google Sheets
+async function buscarPropostasPlanilha() {
+    try {
+        const response = await fetch(`${URL_PROPOSTAS}?action=getPropostas`);
+        const dados = await response.json();
+        return dados.propostas || [];
+    } catch (err) {
+        console.error('Erro ao buscar da planilha:', err);
+        return [];
+    }
+}
+
+// CORRIGIDO: Mescla dados do Supabase com dados da Planilha
 async function carregarPropostas() {
     try {
-        const { data, error } = await supabaseClient
-            .from('propostas_ouvidoria')
-            .select('*')
-            .order('created_at', { ascending: false });
+        // Busca simultânea do Supabase e da Planilha
+        const [supabaseResult, planilhaData] = await Promise.all([
+            supabaseClient
+                .from('propostas_ouvidoria')
+                .select('*')
+                .order('created_at', { ascending: false }),
+            buscarPropostasPlanilha()
+        ]);
 
-        if (error) throw error;
+        if (supabaseResult.error) throw supabaseResult.error;
 
-        propostas = (data || []).map(p => ({
-            id: p.id,
-            nick: p.nick,
-            ordem: p.ordem,
-            tema: p.tema || '',
-            veredito: p.veredito || 'Pendente',
-            isAtualizacaoSimples: p.is_atualizacao || false,
-            tagAtualizacao: p.tag_atualizacao || '',
-            data: formatarDataISO(p.created_at)
-        }));
+        // Guarda dados da planilha para referência
+        propostasPlanilha = planilhaData;
+
+        // Mescla dados: Supabase (veredito, id) + Planilha (tema, descricao, bbcode, tipo)
+        propostas = (supabaseResult.data || []).map(p => {
+            // Procura na planilha pela ordem ou nick
+            const planilhaItem = planilhaData.find(item => 
+                item.ordem === p.ordem || 
+                (item.nick && p.nick && item.nick.toLowerCase() === p.nick.toLowerCase())
+            );
+
+            return {
+                id: p.id,
+                nick: p.nick,
+                ordem: p.ordem,
+                tema: planilhaItem?.tema || p.tema || 'Sem tema',
+                descricao: planilhaItem?.descricao || p.descricao || '',
+                bbcode: planilhaItem?.bbcode || p.bbcode || '',
+                tipo: planilhaItem?.tipo || p.tipo || 'Projeto',
+                veredito: p.veredito || 'Pendente',
+                isAtualizacaoSimples: p.is_atualizacao || false,
+                tagAtualizacao: p.tag_atualizacao || '',
+                data: formatarDataISO(p.created_at || planilhaItem?.data),
+                criadoPor: planilhaItem?.criadoPor || p.criadoPor || p.nick
+            };
+        });
+
+        // Adiciona itens da planilha que não estão no Supabase (backup)
+        planilhaData.forEach(item => {
+            const existe = propostas.find(p => p.ordem === item.ordem);
+            if (!existe) {
+                propostas.push({
+                    id: `planilha_${item.ordem}_${Date.now()}`,
+                    nick: item.nick,
+                    ordem: item.ordem,
+                    tema: item.tema,
+                    descricao: item.descricao,
+                    bbcode: item.bbcode,
+                    tipo: item.tipo,
+                    veredito: item.veredito || 'Pendente',
+                    isAtualizacaoSimples: false,
+                    tagAtualizacao: '',
+                    data: item.data || formatarData(),
+                    criadoPor: item.criadoPor || item.nick
+                });
+            }
+        });
 
         atualizarBadgePendentes();
         renderizarPropostas();
         
     } catch (err) {
+        console.error('Erro detalhado:', err);
         showToast('Erro', 'Falha ao carregar propostas', 'error');
     }
 }
@@ -178,6 +230,10 @@ async function salvarPropostaSupabase(proposta) {
         const dadosSupabase = {
             nick: proposta.nick,
             ordem: proposta.ordem,
+            tema: proposta.tema, // Agora salvamos também no Supabase
+            descricao: proposta.descricao,
+            bbcode: proposta.bbcode || '',
+            tipo: proposta.tipo,
             veredito: 'Pendente'
         };
         
@@ -276,16 +332,17 @@ async function enviarParaPlanilha(proposta) {
             criadoPor: usuarioAtual.nick
         };
 
+        // Remove mode: 'no-cors' para poder ver a resposta
         const response = await fetch(URL_PROPOSTAS, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(dados),
-            mode: 'no-cors'
+            body: JSON.stringify(dados)
         });
 
-        return { sucesso: true };
+        const resultado = await response.json();
+        return resultado;
         
     } catch (err) {
         console.error('Erro ao enviar para planilha:', err);
@@ -293,10 +350,64 @@ async function enviarParaPlanilha(proposta) {
     }
 }
 
+// CORRIGIDO: Postagem no fórum com endpoint correto para Forumactif
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
-        function fazerPostagem() {
-            // Usa FormData tradicional em vez de objeto
+        async function fazerPostagem() {
+            try {
+                // Método 1: Tentar com fetch nativo primeiro (mais confiável)
+                const formData = new FormData();
+                formData.append('t', idTopico);
+                formData.append('mode', 'reply');
+                formData.append('subject', titulo);
+                formData.append('message', mensagem);
+                formData.append('post', 'Enviar');
+                formData.append('notify', '0'); // Sem notificação
+                
+                // Tentar endpoint /post primeiro
+                let response = await fetch('/post', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                // Se falhar, tentar endpoint alternativo /posting.forum
+                if (!response.ok && response.status === 404) {
+                    response = await fetch('/posting.forum', {
+                        method: 'POST',
+                        body: formData,
+                        credentials: 'same-origin',
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    });
+                }
+
+                // Verifica se foi redirecionado para página de sucesso ou erro
+                const responseText = await response.text();
+                
+                if (response.ok || response.status === 302 || response.status === 200) {
+                    // Verifica se há mensagem de erro na resposta HTML
+                    if (responseText.includes('error') || responseText.includes('erro') || responseText.includes('inválido')) {
+                        reject(new Error('Erro na postagem: ' + responseText.substring(0, 200)));
+                    } else {
+                        resolve({ sucesso: true, resposta: responseText });
+                    }
+                } else {
+                    reject(new Error(`HTTP ${response.status}: ${responseText.substring(0, 200)}`));
+                }
+
+            } catch (err) {
+                console.error('Erro no fetch:', err);
+                // Fallback para jQuery se fetch falhar completamente
+                tentarJQuery();
+            }
+        }
+
+        function tentarJQuery() {
             const formData = new URLSearchParams();
             formData.append('t', idTopico);
             formData.append('mode', 'reply');
@@ -309,68 +420,32 @@ async function postarNoForum(idTopico, titulo, mensagem) {
                 type: 'POST',
                 data: formData.toString(),
                 contentType: 'application/x-www-form-urlencoded',
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
+                xhrFields: {
+                    withCredentials: true
                 },
                 success: function(response) {
-                    // Verifica se houve erro na resposta (redirecionamento ou mensagem de erro)
-                    if (response.includes('erro') || response.includes('error')) {
-                        reject(new Error('Erro na postagem: ' + response));
+                    if (typeof response === 'string' && (response.includes('erro') || response.includes('error'))) {
+                        reject(new Error('Erro na postagem'));
                     } else {
-                        resolve(response);
+                        resolve({ sucesso: true });
                     }
                 },
                 error: function(xhr, status, error) {
-                    console.error('Erro AJAX:', {
-                        status: status,
-                        error: error,
-                        response: xhr.responseText,
-                        statusCode: xhr.status
-                    });
-                    
-                    // Tenta método alternativo com fetch se jQuery falhar
-                    if (xhr.status === 0 || xhr.status === 403) {
-                        tentarFetchAlternativo();
-                    } else {
-                        reject(new Error(`Erro na postagem: ${status} - ${error}`));
-                    }
+                    console.error('Erro AJAX:', status, error);
+                    reject(new Error(`Erro AJAX: ${status}`));
                 }
             });
-        }
-
-        function tentarFetchAlternativo() {
-            // Fallback usando fetch API nativa
-            const formData = new FormData();
-            formData.append('t', idTopico);
-            formData.append('mode', 'reply');
-            formData.append('subject', titulo);
-            formData.append('message', mensagem);
-            formData.append('post', 'Enviar');
-
-            fetch('/post', {
-                method: 'POST',
-                body: formData,
-                credentials: 'same-origin',
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-            .then(response => {
-                if (response.ok || response.status === 302) {
-                    return response.text();
-                }
-                throw new Error(`HTTP ${response.status}`);
-            })
-            .then(text => resolve(text))
-            .catch(err => reject(err));
         }
 
         // Carrega jQuery se necessário
         if (typeof $ === 'undefined') {
             const script = document.createElement('script');
             script.src = 'https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js';
-            script.onload = () => setTimeout(fazerPostagem, 100); // Delay para garantir carregamento
-            script.onerror = () => reject(new Error('Falha ao carregar jQuery'));
+            script.onload = () => setTimeout(fazerPostagem, 100);
+            script.onerror = () => {
+                // Se falhar carregar jQuery, tenta com fetch mesmo assim
+                fazerPostagem();
+            };
             document.head.appendChild(script);
         } else {
             fazerPostagem();
@@ -379,11 +454,11 @@ async function postarNoForum(idTopico, titulo, mensagem) {
 }
 
 function gerarBBCodeForum(proposta) {
-    const checkboxProjeto = proposta.tipo === 'Projeto' ? '(X)' : '(  )';
-    const checkboxSugestao = proposta.tipo === 'Sugestão' ? '(X)' : '(  )';
-    const checkboxAlteracao = proposta.tipo === 'Correção/Alteração' ? '(X)' : '(  )';
+    const checkboxProjeto = proposta.tipo === 'Projeto' ? '☑' : '☐';
+    const checkboxSugestao = proposta.tipo === 'Sugestão' ? '☑' : '☐';
+    const checkboxAlteracao = proposta.tipo === 'Correção/Alteração' ? '☑' : '☐';
     
-    const bbcodeSpoiler = proposta.bbcode ? `[spoiler=BBCode]${proposta.bbcode}[/spoiler]` : '';
+    const bbcodeSpoiler = proposta.bbcode ? `[spoiler="BBCode"]${proposta.bbcode}[/spoiler]` : '';
     
     return `[b]Nick:[/b] ${proposta.nick}
 [b]Número de ordem:[/b] ${proposta.ordem}
@@ -495,25 +570,33 @@ async function enviarProposta() {
     };
 
     try {
-        showToast('Enviando', 'Salvando proposta...', 'info');
+        showToast('Enviando', 'Salvando proposta no sistema...', 'info');
         
+        // 1. Salva no Supabase
         await salvarPropostaSupabase(novaProposta);
         
-        showToast('Enviando', 'Enviando para planilha...', 'info');
-        await enviarParaPlanilha(novaProposta);
+        // 2. Envia para Planilha
+        showToast('Enviando', 'Salvando na planilha...', 'info');
+        const resultadoPlanilha = await enviarParaPlanilha(novaProposta);
         
+        if (!resultadoPlanilha.sucesso) {
+            console.warn('Aviso: Proposta salva no Supabase mas houve erro na planilha:', resultadoPlanilha.erro);
+        }
+        
+        // 3. Posta no Fórum
         showToast('Enviando', 'Postando no fórum...', 'info');
         const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
         const mensagemForum = gerarBBCodeForum(novaProposta);
         
         try {
             await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
-            showToast('Sucesso', 'Postagem no fórum realizada!', 'success');
+            showToast('Sucesso', 'Proposta enviada para fórum!', 'success');
         } catch (forumErr) {
             console.error('Erro ao postar no fórum:', forumErr);
-            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum', 'warning');
+            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum. Tente novamente.', 'warning');
         }
         
+        // Limpa formulário
         const container = document.getElementById('nicksContainer');
         if (container) {
             container.innerHTML = `
@@ -976,56 +1059,70 @@ function renderizarPropostas() {
             </div>
         `;
 
-        const conteudoExpandido = `
-            <div class="proposta-content">
-                <div class="proposta-detalhes-externo">
-                    <div class="detalhe-item-externo">
-                        <span class="detalhe-label-externo">Tema</span>
-                        <span class="detalhe-valor-externo">${p.tema}</span>
+        return `
+            <div class="proposta-item" id="proposta-${p.id}">
+                <div class="proposta-header">
+                    ${avataresHTML}
+                    <div class="proposta-info">
+                        <div class="proposta-nick">${p.nick}</div>
+                        <div class="proposta-meta">
+                            <span><i class="fa-regular fa-clock"></i> ${p.data}</span>
+                            <span class="proposta-tipo tipo-projeto">
+                                <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
+                            </span>
+                        </div>
+                        <div class="proposta-tema">${p.tema}</div>
+                        <div class="proposta-status">
+                            ${vereditoDropdownHTML}
+                        </div>
                     </div>
-                    <div class="detalhe-item-externo">
-                        <span class="detalhe-label-externo">Tipo</span>
-                        <span class="detalhe-valor-externo">${tipoSelecionado}</span>
-                    </div>
-                    <div class="detalhe-item-externo">
-                        <span class="detalhe-label-externo">Ordem</span>
-                        <span class="detalhe-valor-externo">#${p.ordem}</span>
-                    </div>
-                    <div class="detalhe-item-externo">
-                        <span class="detalhe-label-externo">Status</span>
-                        <span class="detalhe-valor-externo">${p.veredito}</span>
-                    </div>
-                </div>
-                <div class="proposta-actions-sutis">
-                    ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
+                    <button class="proposta-expand" onclick="toggleProposta(${p.id}, event)" title="Expandir/Recolher">
+                        <i class="fa-solid fa-chevron-down"></i>
+                    </button>
                 </div>
             </div>
         `;
-
-return `
-    <div class="proposta-item" id="proposta-${p.id}">
-        <div class="proposta-header">
-            ${avataresHTML}
-            <div class="proposta-info">
-                <div class="proposta-nick">${p.nick}</div>
-                <div class="proposta-meta">
-                    <span><i class="fa-regular fa-clock"></i> ${p.data}</span>
-                    <span class="proposta-tipo tipo-projeto">
-                        <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
-                    </span>
-                </div>
-                <div class="proposta-tema">${p.tema}</div>
-                <div class="proposta-status">
-                    ${vereditoDropdownHTML}
-                </div>
-            </div>
-            <button class="proposta-expand" onclick="toggleProposta(${p.id}, event)" title="Expandir/Recolher">
-                <i class="fa-solid fa-chevron-down"></i>
-            </button>
-        </div>
-    </div>
-`;
     }).join('');
+}
+
+function gerarConteudoExpandido(p) {
+    return `
+        <div class="proposta-content">
+            <div class="proposta-detalhes-externo">
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Tema</span>
+                    <span class="detalhe-valor-externo">${p.tema || 'N/A'}</span>
+                </div>
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Tipo</span>
+                    <span class="detalhe-valor-externo">${p.tipo || 'N/A'}</span>
+                </div>
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Ordem</span>
+                    <span class="detalhe-valor-externo">#${p.ordem}</span>
+                </div>
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Status</span>
+                    <span class="detalhe-valor-externo">${p.veredito}</span>
+                </div>
+                ${p.descricao ? `
+                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
+                    <span class="detalhe-label-externo">Descrição</span>
+                    <span class="detalhe-valor-externo" style="white-space: pre-wrap;">${p.descricao}</span>
+                </div>
+                ` : ''}
+                ${p.bbcode ? `
+                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
+                    <span class="detalhe-label-externo">BBCode</span>
+                    <pre class="detalhe-valor-externo" style="background: var(--bg-tertiary); padding: 10px; border-radius: 6px; font-size: 11px; overflow-x: auto;">${p.bbcode}</pre>
+                </div>
+                ` : ''}
+            </div>
+            <div class="proposta-actions-sutis">
+                ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
+            </div>
+        </div>
+    `;
 }
 
 function obterPropostasFiltradas() {
@@ -1081,46 +1178,6 @@ function renderizarPaginacao(totalItens) {
     </button>`;
     
     pagination.innerHTML = html;
-}
-
-function gerarConteudoExpandido(p) {
-    return `
-        <div class="proposta-content">
-            <div class="proposta-detalhes-externo">
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Tema</span>
-                    <span class="detalhe-valor-externo">${p.tema || 'N/A'}</span>
-                </div>
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Tipo</span>
-                    <span class="detalhe-valor-externo">${p.tipo || 'N/A'}</span>
-                </div>
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Ordem</span>
-                    <span class="detalhe-valor-externo">#${p.ordem}</span>
-                </div>
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Status</span>
-                    <span class="detalhe-valor-externo">${p.veredito}</span>
-                </div>
-                ${p.descricao ? `
-                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
-                    <span class="detalhe-label-externo">Descrição</span>
-                    <span class="detalhe-valor-externo" style="white-space: pre-wrap;">${p.descricao}</span>
-                </div>
-                ` : ''}
-                ${p.bbcode ? `
-                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
-                    <span class="detalhe-label-externo">BBCode</span>
-                    <pre class="detalhe-valor-externo" style="background: var(--bg-tertiary); padding: 10px; border-radius: 6px; font-size: 11px; overflow-x: auto;">${p.bbcode}</pre>
-                </div>
-                ` : ''}
-            </div>
-            <div class="proposta-actions-sutis">
-                ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
-            </div>
-        </div>
-    `;
 }
 
 function mudarPagina(novaPagina) {
