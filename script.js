@@ -160,8 +160,6 @@ async function carregarPropostas() {
             nick: p.nick,
             ordem: p.ordem,
             tema: p.tema || '',
-            descricao: p.descricao || '',
-            bbcode: p.bbcode || '',
             veredito: p.veredito || 'Pendente',
             isAtualizacaoSimples: p.is_atualizacao || false,
             tagAtualizacao: p.tag_atualizacao || '',
@@ -183,9 +181,6 @@ async function salvarPropostaSupabase(proposta) {
             .insert([{
                 nick: proposta.nick,
                 ordem: proposta.ordem,
-                tema: proposta.tema,
-                descricao: proposta.descricao,
-                bbcode: proposta.bbcode || '',
                 veredito: 'Pendente',
                 is_atualizacao: proposta.isAtualizacaoSimples || false,
                 tag_atualizacao: proposta.tagAtualizacao || null
@@ -442,7 +437,6 @@ async function enviarProposta() {
         ordem: ordem,
         tema: tema,
         descricao: descricao,
-        descricaoFormatada: descricao,
         bbcode: bbcode || '',
         data: formatarData(),
         veredito: 'Pendente',
@@ -933,9 +927,6 @@ function renderizarPropostas() {
 
         const conteudoExpandido = `
             <div class="proposta-content">
-                <div class="proposta-bbcode">
-                    ${p.bbcode ? renderizarCodeViewer(p.bbcode, p.id) : '<p style="color: var(--text-tertiary); text-align: center; padding: 20px;"><i class="fa-solid fa-code" style="font-size: 24px; margin-bottom: 8px; display: block;"></i>Nenhum BBCode fornecido</p>'}
-                </div>
                 <div class="proposta-detalhes-externo">
                     <div class="detalhe-item-externo">
                         <span class="detalhe-label-externo">Tema</span>
@@ -954,41 +945,7 @@ function renderizarPropostas() {
                         <span class="detalhe-valor-externo">${p.veredito}</span>
                     </div>
                 </div>
-                <div class="comentarios-section">
-                    <div class="comentarios-header">
-                        <i class="fa-solid fa-comments"></i>
-                        Comentários
-                    </div>
-                    <div class="comentarios-list" id="comentarios-${p.id}">
-                        <div class="comentario-item">
-                            <div class="comentario-avatar">
-                                <img src="https://www.habbo.com.br/habbo-imaging/avatarimage?user=${encodeURIComponent(usuarioAtual.nick)}&headonly=0&size=b&gesture=sml&direction=2&head_direction=2" 
-                                     alt="${usuarioAtual.nick}">
-                            </div>
-                            <div class="comentario-content">
-                                <div class="comentario-header">
-                                    <span class="comentario-tag">${usuarioAtual.cargo}</span>
-                                    <span class="comentario-nick">${usuarioAtual.nick}</span>
-                                    <span class="comentario-data">Agora</span>
-                                </div>
-                                <div class="comentario-texto">Sistema de comentários em desenvolvimento...</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="comentario-input-area" id="comentario-input-area-${p.id}">
-                        <textarea class="comentario-input" placeholder="Digite seu comentário..."></textarea>
-                        <button class="btn btn-primary btn-sm" style="align-self: flex-end;">
-                            <i class="fa-solid fa-paper-plane"></i> Enviar
-                        </button>
-                    </div>
-                </div>
                 <div class="proposta-actions-sutis">
-                    <button class="btn-sutil comentario" onclick="toggleComentarioInput(${p.id})">
-                        <i class="fa-solid fa-comment"></i> Comentar
-                    </button>
-                    <button class="btn-sutil" onclick="copiarBBCode('${p.id}')">
-                        <i class="fa-solid fa-copy"></i> Copiar BBCode
-                    </button>
                     ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
                 </div>
             </div>
@@ -1019,139 +976,6 @@ function renderizarPropostas() {
             </div>
         `;
     }).join('');
-}
-
-function renderizarCodeViewer(bbcode, propostaId) {
-    const codeId = `code-${propostaId}`;
-    const escapedBBCode = bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const highlightedCode = syntaxHighlightBBCode(escapedBBCode);
-    
-    return `
-        <div class="code-viewer">
-            <div class="code-header">
-                <div class="code-header-left">
-                    <div class="code-dots">
-                        <div class="code-dot red"></div>
-                        <div class="code-dot yellow"></div>
-                        <div class="code-dot green"></div>
-                    </div>
-                    <span class="code-title">BBCode</span>
-                </div>
-                <div class="code-actions">
-                    <div class="zoom-controls">
-                        <button class="zoom-btn" onclick="ajustarZoom('${codeId}', -1)" title="Diminuir zoom">
-                            <i class="fa-solid fa-minus"></i>
-                        </button>
-                        <span class="zoom-level" id="zoom-level-${codeId}">100%</span>
-                        <button class="zoom-btn" onclick="ajustarZoom('${codeId}', 1)" title="Aumentar zoom">
-                            <i class="fa-solid fa-plus"></i>
-                        </button>
-                    </div>
-                    <button class="code-btn" onclick="copiarCode('${codeId}')" id="btn-copy-${codeId}">
-                        <i class="fa-solid fa-copy"></i> Copiar
-                    </button>
-                </div>
-            </div>
-            <div class="code-body" id="body-${codeId}">
-                <div class="code-content" id="${codeId}" data-zoom="100">${highlightedCode}</div>
-                <div class="code-expand-bar">
-                    <button class="btn-toggle-code" onclick="toggleCodeExpand('${codeId}')">
-                        <i class="fa-solid fa-chevron-down"></i> Expandir
-                    </button>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-function syntaxHighlightBBCode(code) {
-    return code
-        .replace(/(\[.*?\])/g, '<span class="code-syntax-tag">$1</span>')
-        .replace(/(\[.*?\s)(.*?)(\])/g, '$1<span class="code-syntax-attr">$2</span>$3')
-        .replace(/(".*?")/g, '<span class="code-syntax-value">$1</span>')
-        .replace(/(&lt;.*?&gt;)/g, '<span class="code-syntax-bracket">$1</span>');
-}
-
-function ajustarZoom(codeId, direcao) {
-    const codeElement = document.getElementById(codeId);
-    if (!codeElement) return;
-    
-    let zoomAtual = parseInt(codeElement.dataset.zoom) || 100;
-    zoomAtual += direcao * 10;
-    
-    if (zoomAtual < 70) zoomAtual = 70;
-    if (zoomAtual > 150) zoomAtual = 150;
-    
-    codeElement.dataset.zoom = zoomAtual;
-    codeElement.style.fontSize = `${zoomAtual}%`;
-    
-    const zoomLevel = document.getElementById(`zoom-level-${codeId}`);
-    if (zoomLevel) zoomLevel.textContent = `${zoomAtual}%`;
-}
-
-function copiarCode(codeId) {
-    const codeElement = document.getElementById(codeId);
-    if (!codeElement) return;
-    
-    const texto = codeElement.textContent;
-    
-    navigator.clipboard.writeText(texto).then(() => {
-        const btn = document.getElementById(`btn-copy-${codeId}`);
-        if (btn) {
-            const originalHTML = btn.innerHTML;
-            btn.innerHTML = '<i class="fa-solid fa-check"></i> Copiado!';
-            btn.classList.add('copied');
-            
-            setTimeout(() => {
-                btn.innerHTML = originalHTML;
-                btn.classList.remove('copied');
-            }, 2000);
-        }
-        
-        showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
-    }).catch(err => {
-        console.error('Erro ao copiar:', err);
-        showToast('Erro', 'Falha ao copiar código', 'error');
-    });
-}
-
-function toggleCodeExpand(codeId) {
-    const body = document.getElementById(`body-${codeId}`);
-    if (!body) return;
-    
-    body.classList.toggle('expanded');
-    
-    const btn = body.querySelector('.btn-toggle-code');
-    if (btn) {
-        const isExpanded = body.classList.contains('expanded');
-        btn.innerHTML = isExpanded ? '<i class="fa-solid fa-chevron-up"></i> Recolher' : '<i class="fa-solid fa-chevron-down"></i> Expandir';
-    }
-}
-
-function copiarBBCode(propostaId) {
-    const proposta = propostas.find(p => p.id == propostaId);
-    if (!proposta || !proposta.bbcode) {
-        showToast('Erro', 'Nenhum BBCode para copiar', 'error');
-        return;
-    }
-    
-    navigator.clipboard.writeText(proposta.bbcode).then(() => {
-        showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
-    }).catch(err => {
-        console.error('Erro ao copiar:', err);
-        showToast('Erro', 'Falha ao copiar BBCode', 'error');
-    });
-}
-
-function toggleComentarioInput(propostaId) {
-    const inputArea = document.getElementById(`comentario-input-area-${propostaId}`);
-    if (inputArea) {
-        inputArea.classList.toggle('active');
-        if (inputArea.classList.contains('active')) {
-            const textarea = inputArea.querySelector('textarea');
-            if (textarea) textarea.focus();
-        }
-    }
 }
 
 function obterPropostasFiltradas() {
@@ -1227,9 +1051,7 @@ function toggleProposta(id, event) {
         if (event.target.closest('.btn') || 
             event.target.closest('.veredito-dropdown') || 
             event.target.closest('.proposta-avatars') ||
-            event.target.closest('.btn-sutil') ||
-            event.target.closest('.code-btn') ||
-            event.target.closest('.zoom-btn')) {
+            event.target.closest('.btn-sutil')) {
             return;
         }
     }
