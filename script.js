@@ -1,10 +1,6 @@
-const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
 const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
-const URL_PROPOSTAS = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
+const URL_OUVIDORIA = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec'; // ⬅️ COLE SEU ID DO APPS SCRIPT
 const ID_TOPICO_FORUM = '1';
-
-const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let usuarioAtual = {
     nick: '',
@@ -14,15 +10,13 @@ let usuarioAtual = {
 };
 
 let propostas = [];
-let propostasPlanilha = [];
 let logAcoes = [];
 let tipoSelecionado = 'Projeto';
 let abaAtual = 'todos';
 let paginaAtual = 1;
 const ITENS_POR_PAGINA = 10;
 let nickPrincipal = '';
-let subscriptionPendentes = null;
-let propostaIdParaVeredito = null;
+let propostaOrdemParaVeredito = null;
 
 async function pegarUsernameForum() {
     try {
@@ -96,7 +90,6 @@ async function inicializarSistema() {
         
         await carregarPropostas();
         await carregarLogs();
-        iniciarRealtimePendentes();
         
         const firstNick = document.querySelector('.nick-input');
         if (firstNick) {
@@ -141,192 +134,40 @@ function verificarPermissoesUI() {
     }
 }
 
-async function buscarPropostasPlanilha() {
-    try {
-        const response = await fetch(`${URL_PROPOSTAS}?action=getPropostas`);
-        const dados = await response.json();
-        return dados.propostas || [];
-    } catch (err) {
-        console.error('Erro ao buscar da planilha:', err);
-        return [];
-    }
-}
-
-// CORRIGIDO: Usa ordem como chave única, sem duplicação
+// BUSCA TODAS AS PROPOSTAS DA PLANILHA
 async function carregarPropostas() {
     try {
-        // Busca simultânea do Supabase e da Planilha
-        const [supabaseResult, planilhaData] = await Promise.all([
-            supabaseClient
-                .from('propostas_ouvidoria')
-                .select('id, nick, ordem, veredito, is_atualizacao, tag_atualizacao, created_at')
-                .order('created_at', { ascending: false }),
-            buscarPropostasPlanilha()
-        ]);
+        const response = await fetch(`${URL_OUVIDORIA}?action=getPropostas`);
+        const dados = await response.json();
+        
+        propostas = (dados.propostas || []).map(p => ({
+            ordem: p.ordem,
+            nick: p.nick,
+            tema: p.tema || 'Sem tema',
+            descricao: p.descricao || '',
+            bbcode: p.bbcode || '',
+            tipo: p.tipo || 'Projeto',
+            veredito: p.veredito || 'Pendente',
+            data: p.data || formatarData(),
+            criadoPor: p.criadoPor || p.nick,
+            timestamp: p.timestamp || new Date().toISOString(),
+            isAtualizacaoSimples: p.ordem === 'UPD' || p.tipo === 'Atualização'
+        }));
 
-        if (supabaseResult.error) throw supabaseResult.error;
-
-        propostasPlanilha = planilhaData;
-
-        // Mapa de propostas do Supabase pela ordem
-        const supabaseMap = new Map();
-        (supabaseResult.data || []).forEach(p => {
-            supabaseMap.set(p.ordem, p);
-        });
-
-        // Cria lista única baseada na planilha (fonte da verdade para dados)
-        // e mescla com veredito do Supabase
-        const propostasUnicas = new Map();
-
-        // Primeiro adiciona todas da planilha
-        planilhaData.forEach(item => {
-            const supabaseItem = supabaseMap.get(item.ordem);
-            
-            propostasUnicas.set(item.ordem, {
-                id: supabaseItem?.id || `planilha_${item.ordem}`,
-                nick: item.nick,
-                ordem: item.ordem,
-                tema: item.tema || 'Sem tema',
-                descricao: item.descricao || '',
-                bbcode: item.bbcode || '',
-                tipo: item.tipo || 'Projeto',
-                // VEREDITO SEMPRE DO SUPABASE (ou Pendente se não existir)
-                veredito: supabaseItem?.veredito || 'Pendente',
-                isAtualizacaoSimples: supabaseItem?.is_atualizacao || false,
-                tagAtualizacao: supabaseItem?.tag_atualizacao || '',
-                data: item.data || formatarDataISO(supabaseItem?.created_at),
-                criadoPor: item.criadoPor || item.nick,
-                // Flag para saber se existe no Supabase
-                existeNoSupabase: !!supabaseItem
-            });
-        });
-
-        // Adiciona itens do Supabase que podem não estar na planilha (raro, mas possível)
-        (supabaseResult.data || []).forEach(p => {
-            if (!propostasUnicas.has(p.ordem)) {
-                propostasUnicas.set(p.ordem, {
-                    id: p.id,
-                    nick: p.nick,
-                    ordem: p.ordem,
-                    tema: 'Sem tema (apenas Supabase)',
-                    descricao: '',
-                    bbcode: '',
-                    tipo: 'Projeto',
-                    veredito: p.veredito || 'Pendente',
-                    isAtualizacaoSimples: p.is_atualizacao || false,
-                    tagAtualizacao: p.tag_atualizacao || '',
-                    data: formatarDataISO(p.created_at),
-                    criadoPor: p.nick,
-                    existeNoSupabase: true
-                });
-            }
-        });
-
-        // Converte Map para Array
-        propostas = Array.from(propostasUnicas.values());
+        // Ordena por timestamp (mais recente primeiro)
+        propostas.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
         atualizarBadgePendentes();
         renderizarPropostas();
         
     } catch (err) {
-        console.error('Erro detalhado:', err);
-        showToast('Erro', 'Falha ao carregar propostas', 'error');
+        console.error('Erro ao carregar propostas:', err);
+        showToast('Erro', 'Falha ao carregar propostas da planilha', 'error');
     }
 }
 
-// CORRIGIDO: Salva APENAS ordem, nick, veredito no Supabase
-async function salvarPropostaSupabase(proposta) {
-    try {
-        // APENAS esses 3 campos + campos de atualização se necessário
-        const dadosSupabase = {
-            ordem: proposta.ordem,
-            nick: proposta.nick,
-            veredito: 'Pendente'
-        };
-        
-        // Apenas para atualizações simples (não é proposta normal)
-        if (proposta.isAtualizacaoSimples) {
-            dadosSupabase.is_atualizacao = true;
-            dadosSupabase.tag_atualizacao = proposta.tagAtualizacao;
-        }
-
-        const { data, error } = await supabaseClient
-            .from('propostas_ouvidoria')
-            .insert([dadosSupabase])
-            .select();
-
-        if (error) throw error;
-        return data[0];
-        
-    } catch (err) {
-        throw err;
-    }
-}
-
-async function atualizarVereditoSupabase(id, novoVeredito) {
-    try {
-        const { error } = await supabaseClient
-            .from('propostas_ouvidoria')
-            .update({ veredito: novoVeredito })
-            .eq('id', id);
-
-        if (error) throw error;
-        
-        await inserirLog('ALTERAR_VEREDITO', `Alterou veredito para ${novoVeredito}`, id);
-        
-    } catch (err) {
-        throw err;
-    }
-}
-
-async function inserirLog(acao, detalhes, propostaId = null) {
-    try {
-        await supabaseClient
-            .from('logs_ouvidoria')
-            .insert([{
-                acao: acao,
-                detalhes: detalhes,
-                proposta_id: propostaId,
-                usuario: usuarioAtual.nick,
-                tag: usuarioAtual.cargo,
-                ip_address: null
-            }]);
-    } catch (err) {
-        console.error('Erro ao inserir log:', err);
-    }
-}
-
-async function carregarLogs() {
-    if (!usuarioAtual.podeAdministrar) return;
-    
-    try {
-        const { data, error } = await supabaseClient
-            .from('logs_ouvidoria')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(100);
-
-        if (error) throw error;
-
-        logAcoes = (data || []).map(l => ({
-            id: l.id,
-            acao: l.acao,
-            detalhes: l.detalhes,
-            propostaId: l.proposta_id,
-            usuario: l.usuario,
-            tag: l.tag,
-            data: formatarDataISO(l.created_at)
-        }));
-
-        renderizarLog();
-        
-    } catch (err) {
-        console.error('Erro ao carregar logs:', err);
-    }
-}
-
-// CORRIGIDO: Não envia veredito para planilha (só Supabase controla isso)
-async function enviarParaPlanilha(proposta) {
+// SALVA NOVA PROPOSTA NA PLANILHA
+async function salvarPropostaPlanilha(proposta) {
     try {
         const dados = {
             acao: 'criarProposta',
@@ -336,12 +177,13 @@ async function enviarParaPlanilha(proposta) {
             tema: proposta.tema,
             descricao: proposta.descricao,
             bbcode: proposta.bbcode || '',
-            // NÃO envia veredito - planilha é só dados, não status
+            veredito: 'Pendente',
             data: proposta.data,
-            criadoPor: usuarioAtual.nick
+            criadoPor: usuarioAtual.nick,
+            timestamp: new Date().toISOString()
         };
 
-        const response = await fetch(URL_PROPOSTAS, {
+        const response = await fetch(URL_OUVIDORIA, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -353,11 +195,93 @@ async function enviarParaPlanilha(proposta) {
         return resultado;
         
     } catch (err) {
-        console.error('Erro ao enviar para planilha:', err);
-        return { sucesso: false, erro: err.message };
+        console.error('Erro ao salvar na planilha:', err);
+        throw err;
     }
 }
 
+// ATUALIZA VEREDITO NA PLANILHA
+async function atualizarVereditoPlanilha(ordem, novoVeredito) {
+    try {
+        const dados = {
+            acao: 'atualizarVeredito',
+            ordem: ordem,
+            veredito: novoVeredito,
+            atualizadoPor: usuarioAtual.nick,
+            timestampAtualizacao: new Date().toISOString()
+        };
+
+        const response = await fetch(URL_OUVIDORIA, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(dados)
+        });
+
+        const resultado = await response.json();
+        
+        if (resultado.sucesso) {
+            await inserirLog('ALTERAR_VEREDITO', `Alterou veredito da ordem #${ordem} para ${novoVeredito}`);
+        }
+        
+        return resultado;
+        
+    } catch (err) {
+        console.error('Erro ao atualizar veredito:', err);
+        throw err;
+    }
+}
+
+// INSERE LOG NA PLANILHA DE LOGS
+async function inserirLog(acao, detalhes) {
+    try {
+        const dados = {
+            acao: 'inserirLog',
+            tipoAcao: acao,
+            detalhes: detalhes,
+            usuario: usuarioAtual.nick,
+            tag: usuarioAtual.cargo,
+            timestamp: new Date().toISOString()
+        };
+
+        await fetch(URL_OUVIDORIA, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(dados)
+        });
+    } catch (err) {
+        console.error('Erro ao inserir log:', err);
+    }
+}
+
+// CARREGA LOGS DA PLANILHA
+async function carregarLogs() {
+    if (!usuarioAtual.podeAdministrar) return;
+    
+    try {
+        const response = await fetch(`${URL_OUVIDORIA}?action=getLogs`);
+        const dados = await response.json();
+        
+        logAcoes = (dados.logs || []).map(l => ({
+            id: l.id || Date.now() + Math.random(),
+            acao: l.acao || l.tipoAcao,
+            detalhes: l.detalhes,
+            usuario: l.usuario,
+            tag: l.tag,
+            data: formatarDataISO(l.timestamp || l.data)
+        }));
+
+        renderizarLog();
+        
+    } catch (err) {
+        console.error('Erro ao carregar logs:', err);
+    }
+}
+
+// POSTA NO FÓRUM
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
         async function fazerPostagem() {
@@ -393,13 +317,13 @@ async function postarNoForum(idTopico, titulo, mensagem) {
                 const responseText = await response.text();
                 
                 if (response.ok || response.status === 302 || response.status === 200) {
-                    if (responseText.includes('error') || responseText.includes('erro') || responseText.includes('inválido')) {
-                        reject(new Error('Erro na postagem: ' + responseText.substring(0, 200)));
+                    if (responseText.includes('error') || responseText.includes('erro')) {
+                        reject(new Error('Erro na postagem'));
                     } else {
-                        resolve({ sucesso: true, resposta: responseText });
+                        resolve({ sucesso: true });
                     }
                 } else {
-                    reject(new Error(`HTTP ${response.status}: ${responseText.substring(0, 200)}`));
+                    reject(new Error(`HTTP ${response.status}`));
                 }
 
             } catch (err) {
@@ -421,18 +345,11 @@ async function postarNoForum(idTopico, titulo, mensagem) {
                 type: 'POST',
                 data: formData.toString(),
                 contentType: 'application/x-www-form-urlencoded',
-                xhrFields: {
-                    withCredentials: true
-                },
+                xhrFields: { withCredentials: true },
                 success: function(response) {
-                    if (typeof response === 'string' && (response.includes('erro') || response.includes('error'))) {
-                        reject(new Error('Erro na postagem'));
-                    } else {
-                        resolve({ sucesso: true });
-                    }
+                    resolve({ sucesso: true });
                 },
                 error: function(xhr, status, error) {
-                    console.error('Erro AJAX:', status, error);
                     reject(new Error(`Erro AJAX: ${status}`));
                 }
             });
@@ -442,9 +359,7 @@ async function postarNoForum(idTopico, titulo, mensagem) {
             const script = document.createElement('script');
             script.src = 'https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js';
             script.onload = () => setTimeout(fazerPostagem, 100);
-            script.onerror = () => {
-                fazerPostagem();
-            };
+            script.onerror = () => fazerPostagem();
             document.head.appendChild(script);
         } else {
             fazerPostagem();
@@ -531,7 +446,7 @@ function obterTodosNicks() {
 function gerarProximaOrdem() {
     if (propostas.length === 0) return '001';
     const ordens = propostas
-        .filter(p => !p.isAtualizacaoSimples)
+        .filter(p => !p.isAtualizacaoSimples && p.ordem !== 'UPD')
         .map(p => parseInt(p.ordem))
         .filter(o => !isNaN(o));
     const maxOrdem = Math.max(...ordens, 0);
@@ -556,44 +471,37 @@ async function enviarProposta() {
     }
 
     const novaProposta = {
-        id: Date.now(),
+        ordem: ordem,
         nick: nicks,
         tipo: tipoSelecionado,
-        ordem: ordem,
         tema: tema,
         descricao: descricao,
         bbcode: bbcode || '',
         data: formatarData(),
-        veredito: 'Pendente',
-        isAtualizacaoSimples: false
+        veredito: 'Pendente'
     };
 
     try {
-        showToast('Enviando', 'Salvando proposta no sistema...', 'info');
-        
-        // 1. Salva no Supabase (apenas ordem, nick, veredito)
-        await salvarPropostaSupabase(novaProposta);
-        
-        // 2. Envia para Planilha (dados completos, SEM veredito)
         showToast('Enviando', 'Salvando na planilha...', 'info');
-        const resultadoPlanilha = await enviarParaPlanilha(novaProposta);
         
-        if (!resultadoPlanilha.sucesso) {
-            console.warn('Aviso: Proposta salva no Supabase mas houve erro na planilha:', resultadoPlanilha.erro);
-        }
+        // Salva na planilha
+        await salvarPropostaPlanilha(novaProposta);
         
-        // 3. Posta no Fórum
+        // Posta no fórum
         showToast('Enviando', 'Postando no fórum...', 'info');
         const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
         const mensagemForum = gerarBBCodeForum(novaProposta);
         
         try {
             await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
-            showToast('Sucesso', 'Proposta enviada para fórum!', 'success');
+            showToast('Sucesso', 'Postagem no fórum realizada!', 'success');
         } catch (forumErr) {
             console.error('Erro ao postar no fórum:', forumErr);
-            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum. Tente novamente.', 'warning');
+            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum', 'warning');
         }
+        
+        // Log
+        await inserirLog('CRIAR_PROPOSTA', `Criou proposta #${ordem} - ${tema}`);
         
         // Limpa formulário
         const container = document.getElementById('nicksContainer');
@@ -626,7 +534,7 @@ async function enviarProposta() {
 
 function toggleAtualizacao() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem atualizar a ouvidoria', 'error');
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem atualizar', 'error');
         return;
     }
     
@@ -650,7 +558,7 @@ function toggleAtualizacao() {
 
 async function postarAtualizacao() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão para esta ação', 'error');
+        showToast('Acesso Negado', 'Sem permissão', 'error');
         return;
     }
 
@@ -665,33 +573,29 @@ async function postarAtualizacao() {
         return;
     }
 
-    const atualizacaoSimples = {
-        id: Date.now(),
+    const atualizacao = {
+        ordem: 'UPD',
         nick: nick,
         tipo: 'Atualização',
-        ordem: 'UPD',
         tema: `Atualização de ${tag}`,
         descricao: `Atualização postada por ${tag} ${nick}`,
-        descricaoFormatada: `Atualização postada por <b>${tag}</b> ${nick}`,
         bbcode: '',
         data: formatarData(),
-        veredito: 'Atualização',
-        isAtualizacaoSimples: true,
-        tagAtualizacao: tag
+        veredito: 'Atualização'
     };
 
     try {
-        await salvarPropostaSupabase(atualizacaoSimples);
+        await salvarPropostaPlanilha(atualizacao);
         
-        const bbcode = `[center][table bgcolor="005fb2" style="border-radius: 14px; overflow: hidden; width: 80%; box-shadow: 0 1px 2px #f233be;"][tr][td][color=#f8f8ff][img(45px,45px)]https://www.habbo.com.br/habbo-imaging/badge/b09064s43084s50134eda71d18c813ca341e7e285475586bf5.gif[/img]
+        const bbcode = `[center][table bgcolor="005fb2" style="border-radius: 14px; overflow: hidden; width: 80%;"][tr][td][color=#f8f8ff][img(45px,45px)]https://www.habbo.com.br/habbo-imaging/badge/b09064s43084s50134eda71d18c813ca341e7e285475586bf5.gif[/img]
 
 [size=13][font=Poppins][b][SRC] Atualização realizada! ${tag}[/size]
 
-[size=11]Foi realizada uma atualização neste horário, em caso de erros, consulte um membro da Liderança.[/b][/font][/size][/color][/td][/tr][/table][/center]`;
+[size=11]Foi realizada uma atualização neste horário.[/b][/font][/size][/color][/td][/tr][/table][/center]`;
 
         await postarNoForum(ID_TOPICO_FORUM, `[Ouvidoria] Atualização - ${new Date().toLocaleDateString('pt-BR')}`, bbcode);
         
-        await inserirLog('ATUALIZACAO_OUVIDORIA', `Postou atualização como ${tag} ${nick}`);
+        await inserirLog('ATUALIZACAO_OUVIDORIA', `Postou atualização como ${tag}`);
         
         toggleAtualizacao();
         await carregarPropostas();
@@ -699,19 +603,19 @@ async function postarAtualizacao() {
         showToast('Sucesso', 'Atualização postada!', 'success');
         
     } catch (err) {
-        console.error('Erro ao postar atualização:', err);
+        console.error('Erro:', err);
         showToast('Erro', 'Falha ao postar atualização', 'error');
     }
 }
 
-function abrirModalVeredito(propostaId) {
+function abrirModalVeredito(ordem) {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder', 'error');
         return;
     }
     
-    propostaIdParaVeredito = propostaId;
-    const proposta = propostas.find(p => p.id === propostaId);
+    propostaOrdemParaVeredito = ordem;
+    const proposta = propostas.find(p => p.ordem === ordem);
     if (!proposta) return;
     
     document.querySelectorAll('.veredito-option-modal').forEach(el => {
@@ -730,7 +634,7 @@ function fecharModalVeredito(event) {
     
     const modal = document.getElementById('vereditoModal');
     if (modal) modal.classList.remove('active');
-    propostaIdParaVeredito = null;
+    propostaOrdemParaVeredito = null;
 }
 
 function selectVereditoModal(element, veredito) {
@@ -739,7 +643,7 @@ function selectVereditoModal(element, veredito) {
 }
 
 async function salvarVeredito() {
-    if (!propostaIdParaVeredito) return;
+    if (!propostaOrdemParaVeredito) return;
     
     const selectedOption = document.querySelector('.veredito-option-modal.selected');
     if (!selectedOption) {
@@ -750,30 +654,29 @@ async function salvarVeredito() {
     const novoVeredito = selectedOption.querySelector('span').textContent;
     
     try {
-        await alterarVeredito(propostaIdParaVeredito, novoVeredito);
+        await alterarVeredito(propostaOrdemParaVeredito, novoVeredito);
         fecharModalVeredito();
     } catch (err) {
         showToast('Erro', 'Falha ao salvar veredito', 'error');
     }
 }
 
-async function alterarVeredito(id, novoVeredito) {
+async function alterarVeredito(ordem, novoVeredito) {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
+        showToast('Acesso Negado', 'Sem permissão', 'error');
         return;
     }
 
-    const proposta = propostas.find(p => p.id === id);
-    if (!proposta) return;
-
     try {
-        // Atualiza APENAS no Supabase (nunca na planilha)
-        await atualizarVereditoSupabase(id, novoVeredito);
+        await atualizarVereditoPlanilha(ordem, novoVeredito);
         
         // Atualiza localmente
-        proposta.veredito = novoVeredito;
+        const proposta = propostas.find(p => p.ordem === ordem);
+        if (proposta) {
+            proposta.veredito = novoVeredito;
+        }
         
-        showToast('Sucesso', `Proposta #${proposta.ordem} marcada como ${novoVeredito}`, 'success');
+        showToast('Sucesso', `Proposta #${ordem} marcada como ${novoVeredito}`, 'success');
         atualizarBadgePendentes();
         renderizarPropostas();
         
@@ -782,15 +685,15 @@ async function alterarVeredito(id, novoVeredito) {
     }
 }
 
-function toggleVereditoDropdown(event, propostaId) {
+function toggleVereditoDropdown(event, ordem) {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
+        showToast('Acesso Negado', 'Sem permissão', 'error');
         return;
     }
     event.stopPropagation();
     
     document.querySelectorAll('.veredito-dropdown').forEach(el => {
-        if (el.dataset.propostaId != propostaId) {
+        if (el.dataset.ordem !== ordem) {
             el.classList.remove('active');
         }
     });
@@ -799,9 +702,9 @@ function toggleVereditoDropdown(event, propostaId) {
     if (dropdown) dropdown.classList.toggle('active');
 }
 
-function selecionarVereditoSutil(event, propostaId, novoVeredito) {
+function selecionarVereditoSutil(event, ordem, novoVeredito) {
     event.stopPropagation();
-    alterarVeredito(propostaId, novoVeredito);
+    alterarVeredito(ordem, novoVeredito);
     
     const dropdown = event.currentTarget.closest('.veredito-dropdown');
     if (dropdown) dropdown.classList.remove('active');
@@ -809,7 +712,7 @@ function selecionarVereditoSutil(event, propostaId, novoVeredito) {
 
 function togglePendentes() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver pendentes', 'error');
+        showToast('Acesso Negado', 'Sem permissão', 'error');
         return;
     }
     
@@ -820,30 +723,6 @@ function togglePendentes() {
     if (panel.classList.contains('active')) {
         renderizarPendentes();
     }
-}
-
-function iniciarRealtimePendentes() {
-    if (!usuarioAtual.podeAdministrar) return;
-    
-    subscriptionPendentes = supabaseClient
-        .channel('propostas-pendentes')
-        .on('postgres_changes', 
-            { 
-                event: '*', 
-                schema: 'public', 
-                table: 'propostas_ouvidoria',
-                filter: 'veredito=eq.Pendente'
-            }, 
-            (payload) => {
-                console.log('Mudança detectada:', payload);
-                carregarPropostas();
-                const pendentesPanel = document.getElementById('pendentesPanel');
-                if (pendentesPanel && pendentesPanel.classList.contains('active')) {
-                    renderizarPendentes();
-                }
-            }
-        )
-        .subscribe();
 }
 
 function renderizarPendentes() {
@@ -884,13 +763,13 @@ function renderizarPendentes() {
                     </div>
                 </div>
                 <div class="pendente-actions">
-                    <button class="btn btn-success btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado')">
+                    <button class="btn btn-success btn-sm" onclick="alterarVeredito('${p.ordem}', 'Aprovado')">
                         <i class="fa-solid fa-check"></i>
                     </button>
-                    <button class="btn btn-warning btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado com alteração')">
+                    <button class="btn btn-warning btn-sm" onclick="alterarVeredito('${p.ordem}', 'Aprovado com alteração')">
                         <i class="fa-solid fa-edit"></i>
                     </button>
-                    <button class="btn btn-danger btn-sm" onclick="alterarVeredito(${p.id}, 'Reprovado')">
+                    <button class="btn btn-danger btn-sm" onclick="alterarVeredito('${p.ordem}', 'Reprovado')">
                         <i class="fa-solid fa-times"></i>
                     </button>
                 </div>
@@ -915,7 +794,7 @@ function atualizarBadgePendentes() {
 
 function toggleLog() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver o log', 'error');
+        showToast('Acesso Negado', 'Sem permissão', 'error');
         return;
     }
     
@@ -1021,7 +900,7 @@ function renderizarPropostas() {
                         <i class="fa-solid fa-rotate"></i>
                     </div>
                     <div class="atualizacao-conteudo">
-                        <div class="atualizacao-tag-texto">${p.tagAtualizacao}</div>
+                        <div class="atualizacao-tag-texto">${p.tema.replace('Atualização de ', '')}</div>
                         <div class="atualizacao-nick-texto">${p.nick}</div>
                         <div class="atualizacao-data-texto">${p.data}</div>
                     </div>
@@ -1029,26 +908,26 @@ function renderizarPropostas() {
             `;
         }
 
-        const avataresHTML = gerarAvataresHTML(p.nick, p.id);
+        const avataresHTML = gerarAvataresHTML(p.nick, p.ordem);
         
         const vereditoDropdownHTML = usuarioAtual.podeAdministrar ? `
-            <div class="veredito-dropdown" data-proposta-id="${p.id}">
-                <div class="veredito-trigger" onclick="toggleVereditoDropdown(event, ${p.id})">
+            <div class="veredito-dropdown" data-ordem="${p.ordem}">
+                <div class="veredito-trigger" onclick="toggleVereditoDropdown(event, '${p.ordem}')">
                     <div class="veredito-dot ${p.veredito.toLowerCase().replace(/\s+/g, '')}"></div>
                     <span>${p.veredito}</span>
                     <i class="fa-solid fa-chevron-down" style="font-size: 10px;"></i>
                 </div>
                 <div class="veredito-menu">
-                    <div class="veredito-option pendente" onclick="selecionarVereditoSutil(event, ${p.id}, 'Pendente')">
+                    <div class="veredito-option pendente" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Pendente')">
                         <i class="fa-solid fa-clock"></i> Pendente
                     </div>
-                    <div class="veredito-option aprovado" onclick="selecionarVereditoSutil(event, ${p.id}, 'Aprovado')">
+                    <div class="veredito-option aprovado" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Aprovado')">
                         <i class="fa-solid fa-check-circle"></i> Aprovado
                     </div>
-                    <div class="veredito-option alteracao" onclick="selecionarVereditoSutil(event, ${p.id}, 'Aprovado com alteração')">
+                    <div class="veredito-option alteracao" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Aprovado com alteração')">
                         <i class="fa-solid fa-edit"></i> Com Alteração
                     </div>
-                    <div class="veredito-option reprovado" onclick="selecionarVereditoSutil(event, ${p.id}, 'Reprovado')">
+                    <div class="veredito-option reprovado" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Reprovado')">
                         <i class="fa-solid fa-times-circle"></i> Reprovado
                     </div>
                 </div>
@@ -1061,7 +940,7 @@ function renderizarPropostas() {
         `;
 
         return `
-            <div class="proposta-item" id="proposta-${p.id}">
+            <div class="proposta-item" id="proposta-${p.ordem}">
                 <div class="proposta-header">
                     ${avataresHTML}
                     <div class="proposta-info">
@@ -1077,7 +956,7 @@ function renderizarPropostas() {
                             ${vereditoDropdownHTML}
                         </div>
                     </div>
-                    <button class="proposta-expand" onclick="toggleProposta(${p.id}, event)" title="Expandir/Recolher">
+                    <button class="proposta-expand" onclick="toggleProposta('${p.ordem}', event)" title="Expandir/Recolher">
                         <i class="fa-solid fa-chevron-down"></i>
                     </button>
                 </div>
@@ -1086,7 +965,6 @@ function renderizarPropostas() {
     }).join('');
 }
 
-// CORRIGIDO: BBCode em textarea copiável
 function gerarConteudoExpandido(p) {
     const bbcodeSection = p.bbcode ? `
         <div class="detalhe-item-externo" style="grid-column: 1/-1;">
@@ -1128,31 +1006,29 @@ function gerarConteudoExpandido(p) {
                 ${bbcodeSection}
             </div>
             <div class="proposta-actions-sutis">
-                ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
+                ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito('${p.ordem}')"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
             </div>
         </div>
     `;
 }
 
-// NOVA FUNÇÃO: Copiar BBCode
 function copiarBBCode(ordem) {
     const textarea = document.getElementById(`bbcode-text-${ordem}`);
     if (!textarea) return;
     
     textarea.select();
-    textarea.setSelectionRange(0, 99999); // Para mobile
+    textarea.setSelectionRange(0, 99999);
     
     try {
         navigator.clipboard.writeText(textarea.value).then(() => {
-            showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+            showToast('Copiado!', 'BBCode copiado', 'success');
         }).catch(() => {
-            // Fallback
             document.execCommand('copy');
-            showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+            showToast('Copiado!', 'BBCode copiado', 'success');
         });
     } catch (err) {
         document.execCommand('copy');
-        showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+        showToast('Copiado!', 'BBCode copiado', 'success');
     }
 }
 
@@ -1176,7 +1052,7 @@ function obterPropostasFiltradas() {
         });
     }
     
-    return lista.sort((a, b) => new Date(b.data) - new Date(a.data));
+    return lista;
 }
 
 function renderizarPaginacao(totalItens) {
@@ -1224,7 +1100,7 @@ function mudarPagina(novaPagina) {
     if (tableCard) tableCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function toggleProposta(id, event) {
+function toggleProposta(ordem, event) {
     if (event) {
         if (event.target.closest('.btn') || 
             event.target.closest('.veredito-dropdown') || 
@@ -1234,13 +1110,13 @@ function toggleProposta(id, event) {
         }
     }
     
-    const item = document.getElementById(`proposta-${id}`);
+    const item = document.getElementById(`proposta-${ordem}`);
     if (!item) return;
     
     const isExpanded = item.classList.contains('expanded');
     
     document.querySelectorAll('.proposta-item.expanded').forEach(el => {
-        if (el.id !== `proposta-${id}`) {
+        if (el.id !== `proposta-${ordem}`) {
             el.classList.remove('expanded');
             const content = el.querySelector('.proposta-content');
             if (content) content.remove();
@@ -1253,7 +1129,7 @@ function toggleProposta(id, event) {
         if (content) content.remove();
     } else {
         item.classList.add('expanded');
-        const proposta = propostas.find(p => p.id === id);
+        const proposta = propostas.find(p => p.ordem === ordem);
         if (proposta) {
             const contentHTML = gerarConteudoExpandido(proposta);
             item.insertAdjacentHTML('beforeend', contentHTML);
@@ -1261,11 +1137,11 @@ function toggleProposta(id, event) {
     }
 }
 
-function gerarAvataresHTML(nicksString, propostaId) {
+function gerarAvataresHTML(nicksString, ordem) {
     const nicks = nicksString.split(',').map(n => n.trim()).filter(n => n);
     const maxAvataresVisiveis = 3;
     
-    let html = `<div class="proposta-avatars" onclick="abrirModalAutores('${nicksString}', ${propostaId})" title="Clique para ver todos os autores">`;
+    let html = `<div class="proposta-avatars" onclick="abrirModalAutores('${nicksString}', '${ordem}')" title="Clique para ver todos os autores">`;
     
     nicks.slice(0, maxAvataresVisiveis).forEach((nick, index) => {
         const zIndex = maxAvataresVisiveis - index;
@@ -1316,7 +1192,7 @@ function filtrarPropostas() {
     renderizarPropostas();
 }
 
-function abrirModalAutores(nicksString, propostaId) {
+function abrirModalAutores(nicksString, ordem) {
     const modal = document.getElementById('autoresModal');
     const modalBody = document.getElementById('modalBody');
     const modalTitle = document.getElementById('modalTitle');
@@ -1325,7 +1201,7 @@ function abrirModalAutores(nicksString, propostaId) {
     if (!modal || !modalBody) return;
     
     const nicks = nicksString.split(',').map(n => n.trim()).filter(n => n);
-    const proposta = propostas.find(p => p.id === propostaId);
+    const proposta = propostas.find(p => p.ordem === ordem);
     
     if (modalTitle) modalTitle.textContent = `Autores - Ordem #${proposta ? proposta.ordem : ''}`;
     if (modalCount) modalCount.innerHTML = `<strong>${nicks.length}</strong> autor${nicks.length !== 1 ? 'es' : ''}`;
