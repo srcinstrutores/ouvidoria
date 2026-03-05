@@ -14,7 +14,7 @@ let usuarioAtual = {
 };
 
 let propostas = [];
-let propostasPlanilha = []; // NOVO: Array para dados da planilha
+let propostasPlanilha = [];
 let logAcoes = [];
 let tipoSelecionado = 'Projeto';
 let abaAtual = 'todos';
@@ -94,7 +94,6 @@ async function inicializarSistema() {
         
         await new Promise(resolve => setTimeout(resolve, 0));
         
-        // CARREGA AMBOS: Supabase e Planilha
         await carregarPropostas();
         await carregarLogs();
         iniciarRealtimePendentes();
@@ -142,7 +141,6 @@ function verificarPermissoesUI() {
     }
 }
 
-// NOVA FUNÇÃO: Buscar propostas da planilha Google Sheets
 async function buscarPropostasPlanilha() {
     try {
         const response = await fetch(`${URL_PROPOSTAS}?action=getPropostas`);
@@ -154,48 +152,46 @@ async function buscarPropostasPlanilha() {
     }
 }
 
-// CORRIGIDO: Mescla dados do Supabase com dados da Planilha
+// CORRIGIDO: Busca apenas colunas que existem no Supabase
 async function carregarPropostas() {
     try {
         // Busca simultânea do Supabase e da Planilha
         const [supabaseResult, planilhaData] = await Promise.all([
             supabaseClient
                 .from('propostas_ouvidoria')
-                .select('*')
+                .select('id, nick, ordem, veredito, is_atualizacao, tag_atualizacao, created_at') // Apenas colunas que existem
                 .order('created_at', { ascending: false }),
             buscarPropostasPlanilha()
         ]);
 
         if (supabaseResult.error) throw supabaseResult.error;
 
-        // Guarda dados da planilha para referência
         propostasPlanilha = planilhaData;
 
-        // Mescla dados: Supabase (veredito, id) + Planilha (tema, descricao, bbcode, tipo)
+        // Mescla dados: Supabase (básico) + Planilha (completo)
         propostas = (supabaseResult.data || []).map(p => {
-            // Procura na planilha pela ordem ou nick
+            // Procura na planilha pela ordem
             const planilhaItem = planilhaData.find(item => 
-                item.ordem === p.ordem || 
-                (item.nick && p.nick && item.nick.toLowerCase() === p.nick.toLowerCase())
+                item.ordem === p.ordem
             );
 
             return {
                 id: p.id,
                 nick: p.nick,
                 ordem: p.ordem,
-                tema: planilhaItem?.tema || p.tema || 'Sem tema',
-                descricao: planilhaItem?.descricao || p.descricao || '',
-                bbcode: planilhaItem?.bbcode || p.bbcode || '',
-                tipo: planilhaItem?.tipo || p.tipo || 'Projeto',
+                tema: planilhaItem?.tema || 'Sem tema',
+                descricao: planilhaItem?.descricao || '',
+                bbcode: planilhaItem?.bbcode || '',
+                tipo: planilhaItem?.tipo || 'Projeto',
                 veredito: p.veredito || 'Pendente',
                 isAtualizacaoSimples: p.is_atualizacao || false,
                 tagAtualizacao: p.tag_atualizacao || '',
                 data: formatarDataISO(p.created_at || planilhaItem?.data),
-                criadoPor: planilhaItem?.criadoPor || p.criadoPor || p.nick
+                criadoPor: planilhaItem?.criadoPor || p.nick
             };
         });
 
-        // Adiciona itens da planilha que não estão no Supabase (backup)
+        // Adiciona itens da planilha que não estão no Supabase
         planilhaData.forEach(item => {
             const existe = propostas.find(p => p.ordem === item.ordem);
             if (!existe) {
@@ -225,18 +221,17 @@ async function carregarPropostas() {
     }
 }
 
+// CORRIGIDO: Salva apenas campos que existem no Supabase
 async function salvarPropostaSupabase(proposta) {
     try {
+        // APENAS campos que existem na tabela propostas_ouvidoria do Supabase
         const dadosSupabase = {
             nick: proposta.nick,
             ordem: proposta.ordem,
-            tema: proposta.tema, // Agora salvamos também no Supabase
-            descricao: proposta.descricao,
-            bbcode: proposta.bbcode || '',
-            tipo: proposta.tipo,
             veredito: 'Pendente'
         };
         
+        // Campos opcionais - só adiciona se o Supabase aceitar
         if (proposta.isAtualizacaoSimples) {
             dadosSupabase.is_atualizacao = true;
             dadosSupabase.tag_atualizacao = proposta.tagAtualizacao;
@@ -332,7 +327,6 @@ async function enviarParaPlanilha(proposta) {
             criadoPor: usuarioAtual.nick
         };
 
-        // Remove mode: 'no-cors' para poder ver a resposta
         const response = await fetch(URL_PROPOSTAS, {
             method: 'POST',
             headers: {
@@ -350,21 +344,18 @@ async function enviarParaPlanilha(proposta) {
     }
 }
 
-// CORRIGIDO: Postagem no fórum com endpoint correto para Forumactif
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
         async function fazerPostagem() {
             try {
-                // Método 1: Tentar com fetch nativo primeiro (mais confiável)
                 const formData = new FormData();
                 formData.append('t', idTopico);
                 formData.append('mode', 'reply');
                 formData.append('subject', titulo);
                 formData.append('message', mensagem);
                 formData.append('post', 'Enviar');
-                formData.append('notify', '0'); // Sem notificação
-                
-                // Tentar endpoint /post primeiro
+                formData.append('notify', '0');
+
                 let response = await fetch('/post', {
                     method: 'POST',
                     body: formData,
@@ -374,7 +365,6 @@ async function postarNoForum(idTopico, titulo, mensagem) {
                     }
                 });
 
-                // Se falhar, tentar endpoint alternativo /posting.forum
                 if (!response.ok && response.status === 404) {
                     response = await fetch('/posting.forum', {
                         method: 'POST',
@@ -386,11 +376,9 @@ async function postarNoForum(idTopico, titulo, mensagem) {
                     });
                 }
 
-                // Verifica se foi redirecionado para página de sucesso ou erro
                 const responseText = await response.text();
                 
                 if (response.ok || response.status === 302 || response.status === 200) {
-                    // Verifica se há mensagem de erro na resposta HTML
                     if (responseText.includes('error') || responseText.includes('erro') || responseText.includes('inválido')) {
                         reject(new Error('Erro na postagem: ' + responseText.substring(0, 200)));
                     } else {
@@ -402,7 +390,6 @@ async function postarNoForum(idTopico, titulo, mensagem) {
 
             } catch (err) {
                 console.error('Erro no fetch:', err);
-                // Fallback para jQuery se fetch falhar completamente
                 tentarJQuery();
             }
         }
@@ -437,13 +424,11 @@ async function postarNoForum(idTopico, titulo, mensagem) {
             });
         }
 
-        // Carrega jQuery se necessário
         if (typeof $ === 'undefined') {
             const script = document.createElement('script');
             script.src = 'https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js';
             script.onload = () => setTimeout(fazerPostagem, 100);
             script.onerror = () => {
-                // Se falhar carregar jQuery, tenta com fetch mesmo assim
                 fazerPostagem();
             };
             document.head.appendChild(script);
@@ -572,10 +557,10 @@ async function enviarProposta() {
     try {
         showToast('Enviando', 'Salvando proposta no sistema...', 'info');
         
-        // 1. Salva no Supabase
+        // 1. Salva no Supabase (apenas campos básicos)
         await salvarPropostaSupabase(novaProposta);
         
-        // 2. Envia para Planilha
+        // 2. Envia para Planilha (todos os dados completos)
         showToast('Enviando', 'Salvando na planilha...', 'info');
         const resultadoPlanilha = await enviarParaPlanilha(novaProposta);
         
