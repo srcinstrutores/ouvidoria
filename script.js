@@ -21,6 +21,7 @@ let paginaAtual = 1;
 const ITENS_POR_PAGINA = 10;
 let nickPrincipal = '';
 let subscriptionPendentes = null;
+let propostaIdParaVeredito = null;
 
 async function pegarUsernameForum() {
     try {
@@ -113,36 +114,26 @@ async function inicializarSistema() {
 }
 
 function verificarPermissoesUI() {
-    // Remove elementos do DOM completamente ao invés de apenas esconder
     const btnPendentes = document.getElementById('btnPendentes');
-    if (btnPendentes) {
-        if (!usuarioAtual.podeAdministrar) {
-            btnPendentes.remove();
-        }
+    if (btnPendentes && !usuarioAtual.podeAdministrar) {
+        btnPendentes.remove();
     }
 
     const btnAtualizar = document.querySelector('button[onclick="toggleAtualizacao()"]');
-    if (btnAtualizar) {
-        if (!usuarioAtual.podeAdministrar) {
-            btnAtualizar.remove();
-        }
+    if (btnAtualizar && !usuarioAtual.podeAdministrar) {
+        btnAtualizar.remove();
     }
 
     const btnLog = document.querySelector('button[onclick="toggleLog()"]');
-    if (btnLog) {
-        if (!usuarioAtual.podeAdministrar) {
-            btnLog.remove();
-        }
+    if (btnLog && !usuarioAtual.podeAdministrar) {
+        btnLog.remove();
     }
 
     const badge = document.getElementById('badgePendentes');
-    if (badge) {
-        if (!usuarioAtual.podeAdministrar) {
-            badge.remove();
-        }
+    if (badge && !usuarioAtual.podeAdministrar) {
+        badge.remove();
     }
 
-    // Se não for admin, remove os painéis administrativos do DOM
     if (!usuarioAtual.podeAdministrar) {
         const pendentesPanel = document.getElementById('pendentesPanel');
         if (pendentesPanel) pendentesPanel.remove();
@@ -306,7 +297,6 @@ async function enviarParaPlanilha(proposta) {
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
         function fazerPostagem() {
-            // Usar FormData em vez de objeto simples para melhor compatibilidade
             const formData = new FormData();
             formData.append('t', idTopico);
             formData.append('mode', 'reply');
@@ -479,7 +469,6 @@ async function enviarProposta() {
             showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum', 'warning');
         }
         
-        // Limpar formulário
         const container = document.getElementById('nicksContainer');
         if (container) {
             container.innerHTML = `
@@ -585,6 +574,59 @@ async function postarAtualizacao() {
     } catch (err) {
         console.error('Erro ao postar atualização:', err);
         showToast('Erro', 'Falha ao postar atualização', 'error');
+    }
+}
+
+function abrirModalVeredito(propostaId) {
+    if (!usuarioAtual.podeAdministrar) {
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
+        return;
+    }
+    
+    propostaIdParaVeredito = propostaId;
+    const proposta = propostas.find(p => p.id === propostaId);
+    if (!proposta) return;
+    
+    document.querySelectorAll('.veredito-option-modal').forEach(el => {
+        el.classList.remove('selected');
+        if (el.querySelector('span').textContent === proposta.veredito) {
+            el.classList.add('selected');
+        }
+    });
+    
+    const modal = document.getElementById('vereditoModal');
+    if (modal) modal.classList.add('active');
+}
+
+function fecharModalVeredito(event) {
+    if (event && event.target !== event.currentTarget && !event.target.closest('.modal-close')) return;
+    
+    const modal = document.getElementById('vereditoModal');
+    if (modal) modal.classList.remove('active');
+    propostaIdParaVeredito = null;
+}
+
+function selectVereditoModal(element, veredito) {
+    document.querySelectorAll('.veredito-option-modal').forEach(el => el.classList.remove('selected'));
+    element.classList.add('selected');
+}
+
+async function salvarVeredito() {
+    if (!propostaIdParaVeredito) return;
+    
+    const selectedOption = document.querySelector('.veredito-option-modal.selected');
+    if (!selectedOption) {
+        showToast('Erro', 'Selecione um veredito', 'error');
+        return;
+    }
+    
+    const novoVeredito = selectedOption.querySelector('span').textContent;
+    
+    try {
+        await alterarVeredito(propostaIdParaVeredito, novoVeredito);
+        fecharModalVeredito();
+    } catch (err) {
+        showToast('Erro', 'Falha ao salvar veredito', 'error');
     }
 }
 
@@ -735,7 +777,6 @@ function atualizarBadgePendentes() {
     const count = propostas.filter(p => p.veredito === 'Pendente' && !p.isAtualizacaoSimples).length;
     badge.textContent = count;
     
-    // Se não houver pendentes ou usuário não for admin, esconde
     if (count === 0 || !usuarioAtual.podeAdministrar) {
         badge.style.display = 'none';
     } else {
@@ -890,36 +931,71 @@ function renderizarPropostas() {
             </div>
         `;
 
-        // CORREÇÃO: Conteúdo expandido que será inserido quando clicar
         const conteudoExpandido = `
-            <div class="proposta-content" style="display: none;">
-                <div class="proposta-detalhes">
-                    <div class="proposta-tema-full">
-                        <i class="fa-solid fa-heading"></i>
-                        <strong>Tema:</strong> ${p.tema}
-                    </div>
-                    <div class="proposta-descricao-full">
-                        <i class="fa-solid fa-align-left"></i>
-                        <strong>Descrição:</strong>
-                        <div class="descricao-texto">${p.descricao}</div>
-                    </div>
-                    ${p.bbcode ? `
-                    <div class="proposta-bbcode">
-                        <i class="fa-solid fa-code"></i>
-                        <strong>BBCode:</strong>
-                        <pre class="bbcode-preview">${p.bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
-                    </div>
-                    ` : ''}
+            <div class="proposta-content">
+                <div class="proposta-bbcode">
+                    ${p.bbcode ? renderizarCodeViewer(p.bbcode, p.id) : '<p style="color: var(--text-tertiary); text-align: center; padding: 20px;"><i class="fa-solid fa-code" style="font-size: 24px; margin-bottom: 8px; display: block;"></i>Nenhum BBCode fornecido</p>'}
                 </div>
-                <div class="proposta-footer">
-                    <span class="proposta-id">ID: ${p.id}</span>
-                    <span class="proposta-ordem-final">Ordem #${p.ordem}</span>
+                <div class="proposta-detalhes-externo">
+                    <div class="detalhe-item-externo">
+                        <span class="detalhe-label-externo">Tema</span>
+                        <span class="detalhe-valor-externo">${p.tema}</span>
+                    </div>
+                    <div class="detalhe-item-externo">
+                        <span class="detalhe-label-externo">Tipo</span>
+                        <span class="detalhe-valor-externo">${tipoSelecionado}</span>
+                    </div>
+                    <div class="detalhe-item-externo">
+                        <span class="detalhe-label-externo">Ordem</span>
+                        <span class="detalhe-valor-externo">#${p.ordem}</span>
+                    </div>
+                    <div class="detalhe-item-externo">
+                        <span class="detalhe-label-externo">Status</span>
+                        <span class="detalhe-valor-externo">${p.veredito}</span>
+                    </div>
+                </div>
+                <div class="comentarios-section">
+                    <div class="comentarios-header">
+                        <i class="fa-solid fa-comments"></i>
+                        Comentários
+                    </div>
+                    <div class="comentarios-list" id="comentarios-${p.id}">
+                        <div class="comentario-item">
+                            <div class="comentario-avatar">
+                                <img src="https://www.habbo.com.br/habbo-imaging/avatarimage?user=${encodeURIComponent(usuarioAtual.nick)}&headonly=0&size=b&gesture=sml&direction=2&head_direction=2" 
+                                     alt="${usuarioAtual.nick}">
+                            </div>
+                            <div class="comentario-content">
+                                <div class="comentario-header">
+                                    <span class="comentario-tag">${usuarioAtual.cargo}</span>
+                                    <span class="comentario-nick">${usuarioAtual.nick}</span>
+                                    <span class="comentario-data">Agora</span>
+                                </div>
+                                <div class="comentario-texto">Sistema de comentários em desenvolvimento...</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="comentario-input-area" id="comentario-input-area-${p.id}">
+                        <textarea class="comentario-input" placeholder="Digite seu comentário..."></textarea>
+                        <button class="btn btn-primary btn-sm" style="align-self: flex-end;">
+                            <i class="fa-solid fa-paper-plane"></i> Enviar
+                        </button>
+                    </div>
+                </div>
+                <div class="proposta-actions-sutis">
+                    <button class="btn-sutil comentario" onclick="toggleComentarioInput(${p.id})">
+                        <i class="fa-solid fa-comment"></i> Comentar
+                    </button>
+                    <button class="btn-sutil" onclick="copiarBBCode('${p.id}')">
+                        <i class="fa-solid fa-copy"></i> Copiar BBCode
+                    </button>
+                    ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
                 </div>
             </div>
         `;
 
         return `
-            <div class="proposta-item" id="proposta-${p.id}" data-tema="${p.tema}" data-descricao="${p.descricao}" data-bbcode="${p.bbcode || ''}">
+            <div class="proposta-item" id="proposta-${p.id}">
                 <div class="proposta-header">
                     ${avataresHTML}
                     <div class="proposta-info">
@@ -930,6 +1006,7 @@ function renderizarPropostas() {
                                 <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
                             </span>
                         </div>
+                        <div class="proposta-tema">${p.tema}</div>
                         <div class="proposta-status">
                             ${vereditoDropdownHTML}
                         </div>
@@ -942,15 +1019,139 @@ function renderizarPropostas() {
             </div>
         `;
     }).join('');
+}
+
+function renderizarCodeViewer(bbcode, propostaId) {
+    const codeId = `code-${propostaId}`;
+    const escapedBBCode = bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const highlightedCode = syntaxHighlightBBCode(escapedBBCode);
     
-    // Adicionar event listeners para os itens expandidos após renderizar
-    document.querySelectorAll('.proposta-item').forEach(item => {
-        const content = item.querySelector('.proposta-content');
-        if (content) {
-            // Inicialmente escondido
-            content.style.display = 'none';
+    return `
+        <div class="code-viewer">
+            <div class="code-header">
+                <div class="code-header-left">
+                    <div class="code-dots">
+                        <div class="code-dot red"></div>
+                        <div class="code-dot yellow"></div>
+                        <div class="code-dot green"></div>
+                    </div>
+                    <span class="code-title">BBCode</span>
+                </div>
+                <div class="code-actions">
+                    <div class="zoom-controls">
+                        <button class="zoom-btn" onclick="ajustarZoom('${codeId}', -1)" title="Diminuir zoom">
+                            <i class="fa-solid fa-minus"></i>
+                        </button>
+                        <span class="zoom-level" id="zoom-level-${codeId}">100%</span>
+                        <button class="zoom-btn" onclick="ajustarZoom('${codeId}', 1)" title="Aumentar zoom">
+                            <i class="fa-solid fa-plus"></i>
+                        </button>
+                    </div>
+                    <button class="code-btn" onclick="copiarCode('${codeId}')" id="btn-copy-${codeId}">
+                        <i class="fa-solid fa-copy"></i> Copiar
+                    </button>
+                </div>
+            </div>
+            <div class="code-body" id="body-${codeId}">
+                <div class="code-content" id="${codeId}" data-zoom="100">${highlightedCode}</div>
+                <div class="code-expand-bar">
+                    <button class="btn-toggle-code" onclick="toggleCodeExpand('${codeId}')">
+                        <i class="fa-solid fa-chevron-down"></i> Expandir
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function syntaxHighlightBBCode(code) {
+    return code
+        .replace(/(\[.*?\])/g, '<span class="code-syntax-tag">$1</span>')
+        .replace(/(\[.*?\s)(.*?)(\])/g, '$1<span class="code-syntax-attr">$2</span>$3')
+        .replace(/(".*?")/g, '<span class="code-syntax-value">$1</span>')
+        .replace(/(&lt;.*?&gt;)/g, '<span class="code-syntax-bracket">$1</span>');
+}
+
+function ajustarZoom(codeId, direcao) {
+    const codeElement = document.getElementById(codeId);
+    if (!codeElement) return;
+    
+    let zoomAtual = parseInt(codeElement.dataset.zoom) || 100;
+    zoomAtual += direcao * 10;
+    
+    if (zoomAtual < 70) zoomAtual = 70;
+    if (zoomAtual > 150) zoomAtual = 150;
+    
+    codeElement.dataset.zoom = zoomAtual;
+    codeElement.style.fontSize = `${zoomAtual}%`;
+    
+    const zoomLevel = document.getElementById(`zoom-level-${codeId}`);
+    if (zoomLevel) zoomLevel.textContent = `${zoomAtual}%`;
+}
+
+function copiarCode(codeId) {
+    const codeElement = document.getElementById(codeId);
+    if (!codeElement) return;
+    
+    const texto = codeElement.textContent;
+    
+    navigator.clipboard.writeText(texto).then(() => {
+        const btn = document.getElementById(`btn-copy-${codeId}`);
+        if (btn) {
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-check"></i> Copiado!';
+            btn.classList.add('copied');
+            
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.classList.remove('copied');
+            }, 2000);
         }
+        
+        showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+    }).catch(err => {
+        console.error('Erro ao copiar:', err);
+        showToast('Erro', 'Falha ao copiar código', 'error');
     });
+}
+
+function toggleCodeExpand(codeId) {
+    const body = document.getElementById(`body-${codeId}`);
+    if (!body) return;
+    
+    body.classList.toggle('expanded');
+    
+    const btn = body.querySelector('.btn-toggle-code');
+    if (btn) {
+        const isExpanded = body.classList.contains('expanded');
+        btn.innerHTML = isExpanded ? '<i class="fa-solid fa-chevron-up"></i> Recolher' : '<i class="fa-solid fa-chevron-down"></i> Expandir';
+    }
+}
+
+function copiarBBCode(propostaId) {
+    const proposta = propostas.find(p => p.id == propostaId);
+    if (!proposta || !proposta.bbcode) {
+        showToast('Erro', 'Nenhum BBCode para copiar', 'error');
+        return;
+    }
+    
+    navigator.clipboard.writeText(proposta.bbcode).then(() => {
+        showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+    }).catch(err => {
+        console.error('Erro ao copiar:', err);
+        showToast('Erro', 'Falha ao copiar BBCode', 'error');
+    });
+}
+
+function toggleComentarioInput(propostaId) {
+    const inputArea = document.getElementById(`comentario-input-area-${propostaId}`);
+    if (inputArea) {
+        inputArea.classList.toggle('active');
+        if (inputArea.classList.contains('active')) {
+            const textarea = inputArea.querySelector('textarea');
+            if (textarea) textarea.focus();
+        }
+    }
 }
 
 function obterPropostasFiltradas() {
@@ -963,11 +1164,13 @@ function obterPropostasFiltradas() {
     } else if (abaAtual === 'pesquisar') {
         const searchNick = document.getElementById('searchNick')?.value.toLowerCase() || '';
         const searchOrdem = document.getElementById('searchOrdem')?.value.toLowerCase() || '';
+        const searchTema = document.getElementById('searchTema')?.value.toLowerCase() || '';
         
         lista = lista.filter(p => {
             const matchNick = !searchNick || p.nick.toLowerCase().includes(searchNick);
             const matchOrdem = !searchOrdem || p.ordem.toLowerCase().includes(searchOrdem);
-            return matchNick && matchOrdem;
+            const matchTema = !searchTema || p.tema.toLowerCase().includes(searchTema);
+            return matchNick && matchOrdem && matchTema;
         });
     }
     
@@ -1019,13 +1222,14 @@ function mudarPagina(novaPagina) {
     if (tableCard) tableCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-// CORREÇÃO PRINCIPAL: Toggle agora realmente expande e mostra o conteúdo
 function toggleProposta(id, event) {
     if (event) {
-        // Não expande se clicou em botão, dropdown ou avatar
         if (event.target.closest('.btn') || 
             event.target.closest('.veredito-dropdown') || 
-            event.target.closest('.proposta-avatars')) {
+            event.target.closest('.proposta-avatars') ||
+            event.target.closest('.btn-sutil') ||
+            event.target.closest('.code-btn') ||
+            event.target.closest('.zoom-btn')) {
             return;
         }
     }
@@ -1033,35 +1237,18 @@ function toggleProposta(id, event) {
     const item = document.getElementById(`proposta-${id}`);
     if (!item) return;
     
-    const content = item.querySelector('.proposta-content');
-    const expandBtn = item.querySelector('.proposta-expand i');
+    const isExpanded = item.classList.contains('expanded');
     
-    if (!content) return;
-    
-    // Fecha todos os outros primeiro
     document.querySelectorAll('.proposta-item.expanded').forEach(el => {
         if (el.id !== `proposta-${id}`) {
             el.classList.remove('expanded');
-            const otherContent = el.querySelector('.proposta-content');
-            const otherBtn = el.querySelector('.proposta-expand i');
-            if (otherContent) otherContent.style.display = 'none';
-            if (otherBtn) otherBtn.style.transform = 'rotate(0deg)';
         }
     });
     
-    // Toggle do atual
-    const isExpanded = item.classList.contains('expanded');
-    
     if (isExpanded) {
-        // Fechar
         item.classList.remove('expanded');
-        content.style.display = 'none';
-        if (expandBtn) expandBtn.style.transform = 'rotate(0deg)';
     } else {
-        // Abrir
         item.classList.add('expanded');
-        content.style.display = 'block';
-        if (expandBtn) expandBtn.style.transform = 'rotate(180deg)';
     }
 }
 
@@ -1310,6 +1497,7 @@ function insertAtCursor(text, textareaId) {
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         fecharModalAutores();
+        fecharModalVeredito();
         document.querySelectorAll('.veredito-dropdown').forEach(el => el.classList.remove('active'));
     }
 });
