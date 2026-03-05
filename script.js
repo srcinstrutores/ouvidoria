@@ -1,5 +1,5 @@
 const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
-const URL_OUVIDORIA = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec'; // ⬅️ COLE SEU ID DO APPS SCRIPT
+const URL_OUVIDORIA = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
 const ID_TOPICO_FORUM = '1';
 
 let usuarioAtual = {
@@ -18,6 +18,107 @@ const ITENS_POR_PAGINA = 10;
 let nickPrincipal = '';
 let propostaOrdemParaVeredito = null;
 
+// FUNÇÃO AJAX COM JSONP PARA BYPASS CORS
+function ajaxJSONP(url, params = {}, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+        const callbackName = 'jsonp_callback_' + Math.round(Math.random() * 1000000);
+        const script = document.createElement('script');
+        const timeoutId = setTimeout(() => {
+            cleanup();
+            reject(new Error('Timeout JSONP'));
+        }, timeout);
+
+        function cleanup() {
+            if (script.parentNode) script.parentNode.removeChild(script);
+            delete window[callbackName];
+            clearTimeout(timeoutId);
+        }
+
+        window[callbackName] = function(data) {
+            cleanup();
+            resolve(data);
+        };
+
+        // Adiciona callback aos parâmetros
+        const allParams = { ...params, callback: callbackName };
+        const queryString = Object.keys(allParams)
+            .map(key => encodeURIComponent(key) + '=' + encodeURIComponent(allParams[key]))
+            .join('&');
+
+        script.src = url + (url.includes('?') ? '&' : '?') + queryString;
+        script.onerror = () => {
+            cleanup();
+            reject(new Error('JSONP failed'));
+        };
+
+        document.head.appendChild(script);
+    });
+}
+
+// POST VIA FORM (não fetch) para evitar CORS preflight
+function postViaForm(url, dados) {
+    return new Promise((resolve, reject) => {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = url;
+        form.target = 'hidden_iframe';
+        form.style.display = 'none';
+
+        // Adiciona campos
+        Object.keys(dados).forEach(key => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = key;
+            input.value = dados[key] || '';
+            form.appendChild(input);
+        });
+
+        // Cria iframe invisível para receber resposta
+        let iframe = document.getElementById('hidden_iframe');
+        if (!iframe) {
+            iframe = document.createElement('iframe');
+            iframe.name = 'hidden_iframe';
+            iframe.id = 'hidden_iframe';
+            iframe.style.display = 'none';
+            document.body.appendChild(iframe);
+        }
+
+        // Timeout
+        const timeoutId = setTimeout(() => {
+            reject(new Error('Timeout no envio'));
+        }, 15000);
+
+        // Listener de resposta
+        iframe.onload = function() {
+            clearTimeout(timeoutId);
+            try {
+                // Tenta pegar resposta do iframe
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                const responseText = iframeDoc.body.innerText || iframeDoc.body.textContent;
+                
+                try {
+                    const json = JSON.parse(responseText);
+                    resolve(json);
+                } catch (e) {
+                    // Se não for JSON, considera sucesso se não tiver erro óbvio
+                    resolve({ sucesso: true, resposta: responseText });
+                }
+            } catch (e) {
+                // Cross-origin pode bloquear leitura, assume sucesso
+                resolve({ sucesso: true });
+            }
+        };
+
+        document.body.appendChild(form);
+        form.submit();
+        
+        // Remove form após envio
+        setTimeout(() => {
+            if (form.parentNode) form.parentNode.removeChild(form);
+        }, 100);
+    });
+}
+
 async function pegarUsernameForum() {
     try {
         const resposta = await fetch("/forum");
@@ -30,7 +131,7 @@ async function pegarUsernameForum() {
             localStorage.setItem("forumUser", username);
             return username;
         }
-        throw new Error('Não autenticado no fórum');
+        throw new Error('Não autenticado');
     } catch (err) {
         const fallback = localStorage.getItem("forumUser");
         if (fallback) return fallback;
@@ -41,8 +142,8 @@ async function pegarUsernameForum() {
 
 async function buscarCargoPlanilha(nick) {
     try {
-        const response = await fetch(URL_MEMBROS);
-        const dados = await response.json();
+        // Usa JSONP para bypass CORS
+        const dados = await ajaxJSONP(URL_MEMBROS, {});
         const listaUsuarios = dados.membros || [];
         
         const usuario = listaUsuarios.find(p => 
@@ -85,8 +186,6 @@ async function inicializarSistema() {
         };
 
         verificarPermissoesUI();
-        
-        await new Promise(resolve => setTimeout(resolve, 0));
         
         await carregarPropostas();
         await carregarLogs();
@@ -134,14 +233,13 @@ function verificarPermissoesUI() {
     }
 }
 
-// BUSCA TODAS AS PROPOSTAS DA PLANILHA
+// GET PROPOSTAS VIA JSONP
 async function carregarPropostas() {
     try {
-        const response = await fetch(`${URL_OUVIDORIA}?action=getPropostas`);
-        const dados = await response.json();
+        const dados = await ajaxJSONP(URL_OUVIDORIA, { action: 'getPropostas' });
         
         propostas = (dados.propostas || []).map(p => ({
-            ordem: p.ordem,
+            ordem: String(p.ordem),
             nick: p.nick,
             tema: p.tema || 'Sem tema',
             descricao: p.descricao || '',
@@ -151,10 +249,9 @@ async function carregarPropostas() {
             data: p.data || formatarData(),
             criadoPor: p.criadoPor || p.nick,
             timestamp: p.timestamp || new Date().toISOString(),
-            isAtualizacaoSimples: p.ordem === 'UPD' || p.tipo === 'Atualização'
+            isAtualizacaoSimples: String(p.ordem) === 'UPD' || p.tipo === 'Atualização'
         }));
 
-        // Ordena por timestamp (mais recente primeiro)
         propostas.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
         atualizarBadgePendentes();
@@ -162,11 +259,11 @@ async function carregarPropostas() {
         
     } catch (err) {
         console.error('Erro ao carregar propostas:', err);
-        showToast('Erro', 'Falha ao carregar propostas da planilha', 'error');
+        showToast('Erro', 'Falha ao carregar propostas', 'error');
     }
 }
 
-// SALVA NOVA PROPOSTA NA PLANILHA
+// POST PROPOSTA VIA FORM (evita CORS preflight)
 async function salvarPropostaPlanilha(proposta) {
     try {
         const dados = {
@@ -183,24 +280,17 @@ async function salvarPropostaPlanilha(proposta) {
             timestamp: new Date().toISOString()
         };
 
-        const response = await fetch(URL_OUVIDORIA, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(dados)
-        });
-
-        const resultado = await response.json();
+        // Usa POST via form em vez de fetch
+        const resultado = await postViaForm(URL_OUVIDORIA, dados);
         return resultado;
         
     } catch (err) {
-        console.error('Erro ao salvar na planilha:', err);
+        console.error('Erro ao salvar:', err);
         throw err;
     }
 }
 
-// ATUALIZA VEREDITO NA PLANILHA
+// ATUALIZAR VEREDITO VIA FORM
 async function atualizarVereditoPlanilha(ordem, novoVeredito) {
     try {
         const dados = {
@@ -211,15 +301,7 @@ async function atualizarVereditoPlanilha(ordem, novoVeredito) {
             timestampAtualizacao: new Date().toISOString()
         };
 
-        const response = await fetch(URL_OUVIDORIA, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(dados)
-        });
-
-        const resultado = await response.json();
+        const resultado = await postViaForm(URL_OUVIDORIA, dados);
         
         if (resultado.sucesso) {
             await inserirLog('ALTERAR_VEREDITO', `Alterou veredito da ordem #${ordem} para ${novoVeredito}`);
@@ -233,7 +315,7 @@ async function atualizarVereditoPlanilha(ordem, novoVeredito) {
     }
 }
 
-// INSERE LOG NA PLANILHA DE LOGS
+// LOG VIA FORM
 async function inserirLog(acao, detalhes) {
     try {
         const dados = {
@@ -245,25 +327,18 @@ async function inserirLog(acao, detalhes) {
             timestamp: new Date().toISOString()
         };
 
-        await fetch(URL_OUVIDORIA, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(dados)
-        });
+        await postViaForm(URL_OUVIDORIA, dados);
     } catch (err) {
         console.error('Erro ao inserir log:', err);
     }
 }
 
-// CARREGA LOGS DA PLANILHA
+// GET LOGS VIA JSONP
 async function carregarLogs() {
     if (!usuarioAtual.podeAdministrar) return;
     
     try {
-        const response = await fetch(`${URL_OUVIDORIA}?action=getLogs`);
-        const dados = await response.json();
+        const dados = await ajaxJSONP(URL_OUVIDORIA, { action: 'getLogs' });
         
         logAcoes = (dados.logs || []).map(l => ({
             id: l.id || Date.now() + Math.random(),
@@ -281,7 +356,7 @@ async function carregarLogs() {
     }
 }
 
-// POSTA NO FÓRUM
+// POST FÓRUM (mantém igual, funciona no mesmo domínio)
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
         async function fazerPostagem() {
@@ -292,78 +367,25 @@ async function postarNoForum(idTopico, titulo, mensagem) {
                 formData.append('subject', titulo);
                 formData.append('message', mensagem);
                 formData.append('post', 'Enviar');
-                formData.append('notify', '0');
 
-                let response = await fetch('/post', {
+                const response = await fetch('/post', {
                     method: 'POST',
                     body: formData,
-                    credentials: 'same-origin',
-                    headers: {
-                        'X-Requested-With': 'XMLHttpRequest'
-                    }
+                    credentials: 'same-origin'
                 });
 
-                if (!response.ok && response.status === 404) {
-                    response = await fetch('/posting.forum', {
-                        method: 'POST',
-                        body: formData,
-                        credentials: 'same-origin',
-                        headers: {
-                            'X-Requested-With': 'XMLHttpRequest'
-                        }
-                    });
-                }
-
-                const responseText = await response.text();
-                
-                if (response.ok || response.status === 302 || response.status === 200) {
-                    if (responseText.includes('error') || responseText.includes('erro')) {
-                        reject(new Error('Erro na postagem'));
-                    } else {
-                        resolve({ sucesso: true });
-                    }
+                if (response.ok || response.status === 302) {
+                    resolve({ sucesso: true });
                 } else {
-                    reject(new Error(`HTTP ${response.status}`));
+                    reject(new Error('HTTP ' + response.status));
                 }
 
             } catch (err) {
-                console.error('Erro no fetch:', err);
-                tentarJQuery();
+                reject(err);
             }
         }
 
-        function tentarJQuery() {
-            const formData = new URLSearchParams();
-            formData.append('t', idTopico);
-            formData.append('mode', 'reply');
-            formData.append('subject', titulo);
-            formData.append('message', mensagem);
-            formData.append('post', 'Enviar');
-
-            $.ajax({
-                url: '/post',
-                type: 'POST',
-                data: formData.toString(),
-                contentType: 'application/x-www-form-urlencoded',
-                xhrFields: { withCredentials: true },
-                success: function(response) {
-                    resolve({ sucesso: true });
-                },
-                error: function(xhr, status, error) {
-                    reject(new Error(`Erro AJAX: ${status}`));
-                }
-            });
-        }
-
-        if (typeof $ === 'undefined') {
-            const script = document.createElement('script');
-            script.src = 'https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js';
-            script.onload = () => setTimeout(fazerPostagem, 100);
-            script.onerror = () => fazerPostagem();
-            document.head.appendChild(script);
-        } else {
-            fazerPostagem();
-        }
+        fazerPostagem();
     });
 }
 
@@ -484,7 +506,7 @@ async function enviarProposta() {
     try {
         showToast('Enviando', 'Salvando na planilha...', 'info');
         
-        // Salva na planilha
+        // Salva via form POST (evita CORS)
         await salvarPropostaPlanilha(novaProposta);
         
         // Posta no fórum
@@ -494,14 +516,14 @@ async function enviarProposta() {
         
         try {
             await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
-            showToast('Sucesso', 'Postagem no fórum realizada!', 'success');
+            showToast('Sucesso', 'Postagem realizada!', 'success');
         } catch (forumErr) {
-            console.error('Erro ao postar no fórum:', forumErr);
-            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum', 'warning');
+            console.error('Erro fórum:', forumErr);
+            showToast('Aviso', 'Proposta salva, mas falha no fórum', 'warning');
         }
         
         // Log
-        await inserirLog('CRIAR_PROPOSTA', `Criou proposta #${ordem} - ${tema}`);
+        await inserirLog('CRIAR_PROPOSTA', `Criou proposta #${ordem}`);
         
         // Limpa formulário
         const container = document.getElementById('nicksContainer');
@@ -524,17 +546,17 @@ async function enviarProposta() {
         toggleForm();
         await carregarPropostas();
         
-        showToast('Sucesso', 'Proposta enviada com sucesso!', 'success');
+        showToast('Sucesso', 'Proposta enviada!', 'success');
         
     } catch (err) {
-        console.error('Erro ao enviar proposta:', err);
-        showToast('Erro', 'Falha ao enviar proposta: ' + err.message, 'error');
+        console.error('Erro:', err);
+        showToast('Erro', 'Falha ao enviar: ' + err.message, 'error');
     }
 }
 
 function toggleAtualizacao() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem atualizar', 'error');
+        showToast('Acesso Negado', 'Sem permissão', 'error');
         return;
     }
     
@@ -610,7 +632,7 @@ async function postarAtualizacao() {
 
 function abrirModalVeredito(ordem) {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder', 'error');
+        showToast('Acesso Negado', 'Sem permissão', 'error');
         return;
     }
     
@@ -670,7 +692,6 @@ async function alterarVeredito(ordem, novoVeredito) {
     try {
         await atualizarVereditoPlanilha(ordem, novoVeredito);
         
-        // Atualiza localmente
         const proposta = propostas.find(p => p.ordem === ordem);
         if (proposta) {
             proposta.veredito = novoVeredito;
