@@ -152,14 +152,14 @@ async function buscarPropostasPlanilha() {
     }
 }
 
-// CORRIGIDO: Busca apenas colunas que existem no Supabase
+// CORRIGIDO: Usa ordem como chave única, sem duplicação
 async function carregarPropostas() {
     try {
         // Busca simultânea do Supabase e da Planilha
         const [supabaseResult, planilhaData] = await Promise.all([
             supabaseClient
                 .from('propostas_ouvidoria')
-                .select('id, nick, ordem, veredito, is_atualizacao, tag_atualizacao, created_at') // Apenas colunas que existem
+                .select('id, nick, ordem, veredito, is_atualizacao, tag_atualizacao, created_at')
                 .order('created_at', { ascending: false }),
             buscarPropostasPlanilha()
         ]);
@@ -168,49 +168,62 @@ async function carregarPropostas() {
 
         propostasPlanilha = planilhaData;
 
-        // Mescla dados: Supabase (básico) + Planilha (completo)
-        propostas = (supabaseResult.data || []).map(p => {
-            // Procura na planilha pela ordem
-            const planilhaItem = planilhaData.find(item => 
-                item.ordem === p.ordem
-            );
-
-            return {
-                id: p.id,
-                nick: p.nick,
-                ordem: p.ordem,
-                tema: planilhaItem?.tema || 'Sem tema',
-                descricao: planilhaItem?.descricao || '',
-                bbcode: planilhaItem?.bbcode || '',
-                tipo: planilhaItem?.tipo || 'Projeto',
-                veredito: p.veredito || 'Pendente',
-                isAtualizacaoSimples: p.is_atualizacao || false,
-                tagAtualizacao: p.tag_atualizacao || '',
-                data: formatarDataISO(p.created_at || planilhaItem?.data),
-                criadoPor: planilhaItem?.criadoPor || p.nick
-            };
+        // Mapa de propostas do Supabase pela ordem
+        const supabaseMap = new Map();
+        (supabaseResult.data || []).forEach(p => {
+            supabaseMap.set(p.ordem, p);
         });
 
-        // Adiciona itens da planilha que não estão no Supabase
+        // Cria lista única baseada na planilha (fonte da verdade para dados)
+        // e mescla com veredito do Supabase
+        const propostasUnicas = new Map();
+
+        // Primeiro adiciona todas da planilha
         planilhaData.forEach(item => {
-            const existe = propostas.find(p => p.ordem === item.ordem);
-            if (!existe) {
-                propostas.push({
-                    id: `planilha_${item.ordem}_${Date.now()}`,
-                    nick: item.nick,
-                    ordem: item.ordem,
-                    tema: item.tema,
-                    descricao: item.descricao,
-                    bbcode: item.bbcode,
-                    tipo: item.tipo,
-                    veredito: item.veredito || 'Pendente',
-                    isAtualizacaoSimples: false,
-                    tagAtualizacao: '',
-                    data: item.data || formatarData(),
-                    criadoPor: item.criadoPor || item.nick
+            const supabaseItem = supabaseMap.get(item.ordem);
+            
+            propostasUnicas.set(item.ordem, {
+                id: supabaseItem?.id || `planilha_${item.ordem}`,
+                nick: item.nick,
+                ordem: item.ordem,
+                tema: item.tema || 'Sem tema',
+                descricao: item.descricao || '',
+                bbcode: item.bbcode || '',
+                tipo: item.tipo || 'Projeto',
+                // VEREDITO SEMPRE DO SUPABASE (ou Pendente se não existir)
+                veredito: supabaseItem?.veredito || 'Pendente',
+                isAtualizacaoSimples: supabaseItem?.is_atualizacao || false,
+                tagAtualizacao: supabaseItem?.tag_atualizacao || '',
+                data: item.data || formatarDataISO(supabaseItem?.created_at),
+                criadoPor: item.criadoPor || item.nick,
+                // Flag para saber se existe no Supabase
+                existeNoSupabase: !!supabaseItem
+            });
+        });
+
+        // Adiciona itens do Supabase que podem não estar na planilha (raro, mas possível)
+        (supabaseResult.data || []).forEach(p => {
+            if (!propostasUnicas.has(p.ordem)) {
+                propostasUnicas.set(p.ordem, {
+                    id: p.id,
+                    nick: p.nick,
+                    ordem: p.ordem,
+                    tema: 'Sem tema (apenas Supabase)',
+                    descricao: '',
+                    bbcode: '',
+                    tipo: 'Projeto',
+                    veredito: p.veredito || 'Pendente',
+                    isAtualizacaoSimples: p.is_atualizacao || false,
+                    tagAtualizacao: p.tag_atualizacao || '',
+                    data: formatarDataISO(p.created_at),
+                    criadoPor: p.nick,
+                    existeNoSupabase: true
                 });
             }
         });
+
+        // Converte Map para Array
+        propostas = Array.from(propostasUnicas.values());
 
         atualizarBadgePendentes();
         renderizarPropostas();
@@ -221,17 +234,17 @@ async function carregarPropostas() {
     }
 }
 
-// CORRIGIDO: Salva apenas campos que existem no Supabase
+// CORRIGIDO: Salva APENAS ordem, nick, veredito no Supabase
 async function salvarPropostaSupabase(proposta) {
     try {
-        // APENAS campos que existem na tabela propostas_ouvidoria do Supabase
+        // APENAS esses 3 campos + campos de atualização se necessário
         const dadosSupabase = {
-            nick: proposta.nick,
             ordem: proposta.ordem,
+            nick: proposta.nick,
             veredito: 'Pendente'
         };
         
-        // Campos opcionais - só adiciona se o Supabase aceitar
+        // Apenas para atualizações simples (não é proposta normal)
         if (proposta.isAtualizacaoSimples) {
             dadosSupabase.is_atualizacao = true;
             dadosSupabase.tag_atualizacao = proposta.tagAtualizacao;
@@ -312,6 +325,7 @@ async function carregarLogs() {
     }
 }
 
+// CORRIGIDO: Não envia veredito para planilha (só Supabase controla isso)
 async function enviarParaPlanilha(proposta) {
     try {
         const dados = {
@@ -322,7 +336,7 @@ async function enviarParaPlanilha(proposta) {
             tema: proposta.tema,
             descricao: proposta.descricao,
             bbcode: proposta.bbcode || '',
-            veredito: 'Pendente',
+            // NÃO envia veredito - planilha é só dados, não status
             data: proposta.data,
             criadoPor: usuarioAtual.nick
         };
@@ -557,10 +571,10 @@ async function enviarProposta() {
     try {
         showToast('Enviando', 'Salvando proposta no sistema...', 'info');
         
-        // 1. Salva no Supabase (apenas campos básicos)
+        // 1. Salva no Supabase (apenas ordem, nick, veredito)
         await salvarPropostaSupabase(novaProposta);
         
-        // 2. Envia para Planilha (todos os dados completos)
+        // 2. Envia para Planilha (dados completos, SEM veredito)
         showToast('Enviando', 'Salvando na planilha...', 'info');
         const resultadoPlanilha = await enviarParaPlanilha(novaProposta);
         
@@ -753,8 +767,10 @@ async function alterarVeredito(id, novoVeredito) {
     if (!proposta) return;
 
     try {
+        // Atualiza APENAS no Supabase (nunca na planilha)
         await atualizarVereditoSupabase(id, novoVeredito);
         
+        // Atualiza localmente
         proposta.veredito = novoVeredito;
         
         showToast('Sucesso', `Proposta #${proposta.ordem} marcada como ${novoVeredito}`, 'success');
@@ -1070,7 +1086,20 @@ function renderizarPropostas() {
     }).join('');
 }
 
+// CORRIGIDO: BBCode em textarea copiável
 function gerarConteudoExpandido(p) {
+    const bbcodeSection = p.bbcode ? `
+        <div class="detalhe-item-externo" style="grid-column: 1/-1;">
+            <span class="detalhe-label-externo">BBCode</span>
+            <div style="position: relative; margin-top: 8px;">
+                <textarea id="bbcode-text-${p.ordem}" readonly style="width: 100%; min-height: 120px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: var(--text-primary); resize: vertical;">${p.bbcode}</textarea>
+                <button onclick="copiarBBCode('${p.ordem}')" style="position: absolute; top: 8px; right: 8px; background: var(--primary); color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <i class="fa-solid fa-copy"></i> Copiar
+                </button>
+            </div>
+        </div>
+    ` : '';
+
     return `
         <div class="proposta-content">
             <div class="proposta-detalhes-externo">
@@ -1096,18 +1125,35 @@ function gerarConteudoExpandido(p) {
                     <span class="detalhe-valor-externo" style="white-space: pre-wrap;">${p.descricao}</span>
                 </div>
                 ` : ''}
-                ${p.bbcode ? `
-                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
-                    <span class="detalhe-label-externo">BBCode</span>
-                    <pre class="detalhe-valor-externo" style="background: var(--bg-tertiary); padding: 10px; border-radius: 6px; font-size: 11px; overflow-x: auto;">${p.bbcode}</pre>
-                </div>
-                ` : ''}
+                ${bbcodeSection}
             </div>
             <div class="proposta-actions-sutis">
                 ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
             </div>
         </div>
     `;
+}
+
+// NOVA FUNÇÃO: Copiar BBCode
+function copiarBBCode(ordem) {
+    const textarea = document.getElementById(`bbcode-text-${ordem}`);
+    if (!textarea) return;
+    
+    textarea.select();
+    textarea.setSelectionRange(0, 99999); // Para mobile
+    
+    try {
+        navigator.clipboard.writeText(textarea.value).then(() => {
+            showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+        }).catch(() => {
+            // Fallback
+            document.execCommand('copy');
+            showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+        });
+    } catch (err) {
+        document.execCommand('copy');
+        showToast('Copiado!', 'BBCode copiado para a área de transferência', 'success');
+    }
 }
 
 function obterPropostasFiltradas() {
