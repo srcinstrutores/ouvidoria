@@ -89,12 +89,17 @@ async function inicializarSistema() {
             podeAdministrar: isLideranca
         };
 
+        // CHAMA ANTES DE TUDO
         verificarPermissoesUI();
+        
+        // Aguarda um tick para garantir remoção do DOM
+        await new Promise(resolve => setTimeout(resolve, 0));
         
         await carregarPropostas();
         await carregarLogs();
         iniciarRealtimePendentes();
         
+        // Preenche formulários
         const firstNick = document.querySelector('.nick-input');
         if (firstNick) {
             firstNick.value = nick;
@@ -108,41 +113,35 @@ async function inicializarSistema() {
         
     } catch (err) {
         usuarioAtual = { nick: 'Visitante', cargo: 'Visitante', isLideranca: false, podeAdministrar: false };
-        verificarPermissoesUI();
+        verificarPermissoesUI(); // Remove botões também em caso de erro
         await carregarPropostas();
     }
 }
 
 function verificarPermissoesUI() {
-    const btnPendentes = document.getElementById('btnPendentes');
-    if (btnPendentes && !usuarioAtual.podeAdministrar) {
-        btnPendentes.remove();
-    }
+    // Remove elementos imediatamente
+    const elementosParaRemover = [
+        '#btnPendentes',
+        'button[onclick="toggleAtualizacao()"]',
+        'button[onclick="toggleLog()"]',
+        '#badgePendentes',
+        '#pendentesPanel',
+        '#atualizacaoPanel', 
+        '#logPanel'
+    ];
 
-    const btnAtualizar = document.querySelector('button[onclick="toggleAtualizacao()"]');
-    if (btnAtualizar && !usuarioAtual.podeAdministrar) {
-        btnAtualizar.remove();
-    }
+    elementosParaRemover.forEach(seletor => {
+        const el = document.querySelector(seletor);
+        if (el && !usuarioAtual.podeAdministrar) {
+            el.remove();
+        }
+    });
 
-    const btnLog = document.querySelector('button[onclick="toggleLog()"]');
-    if (btnLog && !usuarioAtual.podeAdministrar) {
-        btnLog.remove();
-    }
-
-    const badge = document.getElementById('badgePendentes');
-    if (badge && !usuarioAtual.podeAdministrar) {
-        badge.remove();
-    }
-
+    // Esconde dropdowns de veredito se não for admin
     if (!usuarioAtual.podeAdministrar) {
-        const pendentesPanel = document.getElementById('pendentesPanel');
-        if (pendentesPanel) pendentesPanel.remove();
-        
-        const atualizacaoPanel = document.getElementById('atualizacaoPanel');
-        if (atualizacaoPanel) atualizacaoPanel.remove();
-        
-        const logPanel = document.getElementById('logPanel');
-        if (logPanel) logPanel.remove();
+        document.querySelectorAll('.veredito-dropdown').forEach(el => {
+            el.style.display = 'none';
+        });
     }
 }
 
@@ -297,7 +296,8 @@ async function enviarParaPlanilha(proposta) {
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
         function fazerPostagem() {
-            const formData = new FormData();
+            // Usa FormData tradicional em vez de objeto
+            const formData = new URLSearchParams();
             formData.append('t', idTopico);
             formData.append('mode', 'reply');
             formData.append('subject', titulo);
@@ -307,23 +307,69 @@ async function postarNoForum(idTopico, titulo, mensagem) {
             $.ajax({
                 url: '/post',
                 type: 'POST',
-                data: formData,
-                processData: false,
-                contentType: false,
+                data: formData.toString(),
+                contentType: 'application/x-www-form-urlencoded',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
                 success: function(response) {
-                    resolve(response);
+                    // Verifica se houve erro na resposta (redirecionamento ou mensagem de erro)
+                    if (response.includes('erro') || response.includes('error')) {
+                        reject(new Error('Erro na postagem: ' + response));
+                    } else {
+                        resolve(response);
+                    }
                 },
                 error: function(xhr, status, error) {
-                    console.error('Erro AJAX:', status, error, xhr.responseText);
-                    reject(new Error(`Erro na postagem: ${status}`));
+                    console.error('Erro AJAX:', {
+                        status: status,
+                        error: error,
+                        response: xhr.responseText,
+                        statusCode: xhr.status
+                    });
+                    
+                    // Tenta método alternativo com fetch se jQuery falhar
+                    if (xhr.status === 0 || xhr.status === 403) {
+                        tentarFetchAlternativo();
+                    } else {
+                        reject(new Error(`Erro na postagem: ${status} - ${error}`));
+                    }
                 }
             });
         }
 
+        function tentarFetchAlternativo() {
+            // Fallback usando fetch API nativa
+            const formData = new FormData();
+            formData.append('t', idTopico);
+            formData.append('mode', 'reply');
+            formData.append('subject', titulo);
+            formData.append('message', mensagem);
+            formData.append('post', 'Enviar');
+
+            fetch('/post', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => {
+                if (response.ok || response.status === 302) {
+                    return response.text();
+                }
+                throw new Error(`HTTP ${response.status}`);
+            })
+            .then(text => resolve(text))
+            .catch(err => reject(err));
+        }
+
+        // Carrega jQuery se necessário
         if (typeof $ === 'undefined') {
             const script = document.createElement('script');
             script.src = 'https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js';
-            script.onload = () => fazerPostagem();
+            script.onload = () => setTimeout(fazerPostagem, 100); // Delay para garantir carregamento
             script.onerror = () => reject(new Error('Falha ao carregar jQuery'));
             document.head.appendChild(script);
         } else {
@@ -956,30 +1002,29 @@ function renderizarPropostas() {
             </div>
         `;
 
-        return `
-            <div class="proposta-item" id="proposta-${p.id}">
-                <div class="proposta-header">
-                    ${avataresHTML}
-                    <div class="proposta-info">
-                        <div class="proposta-nick">${p.nick}</div>
-                        <div class="proposta-meta">
-                            <span><i class="fa-regular fa-clock"></i> ${p.data}</span>
-                            <span class="proposta-tipo tipo-projeto">
-                                <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
-                            </span>
-                        </div>
-                        <div class="proposta-tema">${p.tema}</div>
-                        <div class="proposta-status">
-                            ${vereditoDropdownHTML}
-                        </div>
-                    </div>
-                    <button class="proposta-expand" onclick="toggleProposta(${p.id}, event)" title="Expandir/Recolher">
-                        <i class="fa-solid fa-chevron-down"></i>
-                    </button>
+return `
+    <div class="proposta-item" id="proposta-${p.id}">
+        <div class="proposta-header">
+            ${avataresHTML}
+            <div class="proposta-info">
+                <div class="proposta-nick">${p.nick}</div>
+                <div class="proposta-meta">
+                    <span><i class="fa-regular fa-clock"></i> ${p.data}</span>
+                    <span class="proposta-tipo tipo-projeto">
+                        <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
+                    </span>
                 </div>
-                ${conteudoExpandido}
+                <div class="proposta-tema">${p.tema}</div>
+                <div class="proposta-status">
+                    ${vereditoDropdownHTML}
+                </div>
             </div>
-        `;
+            <button class="proposta-expand" onclick="toggleProposta(${p.id}, event)" title="Expandir/Recolher">
+                <i class="fa-solid fa-chevron-down"></i>
+            </button>
+        </div>
+    </div>
+`;
     }).join('');
 }
 
@@ -1038,6 +1083,46 @@ function renderizarPaginacao(totalItens) {
     pagination.innerHTML = html;
 }
 
+function gerarConteudoExpandido(p) {
+    return `
+        <div class="proposta-content">
+            <div class="proposta-detalhes-externo">
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Tema</span>
+                    <span class="detalhe-valor-externo">${p.tema || 'N/A'}</span>
+                </div>
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Tipo</span>
+                    <span class="detalhe-valor-externo">${p.tipo || 'N/A'}</span>
+                </div>
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Ordem</span>
+                    <span class="detalhe-valor-externo">#${p.ordem}</span>
+                </div>
+                <div class="detalhe-item-externo">
+                    <span class="detalhe-label-externo">Status</span>
+                    <span class="detalhe-valor-externo">${p.veredito}</span>
+                </div>
+                ${p.descricao ? `
+                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
+                    <span class="detalhe-label-externo">Descrição</span>
+                    <span class="detalhe-valor-externo" style="white-space: pre-wrap;">${p.descricao}</span>
+                </div>
+                ` : ''}
+                ${p.bbcode ? `
+                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
+                    <span class="detalhe-label-externo">BBCode</span>
+                    <pre class="detalhe-valor-externo" style="background: var(--bg-tertiary); padding: 10px; border-radius: 6px; font-size: 11px; overflow-x: auto;">${p.bbcode}</pre>
+                </div>
+                ` : ''}
+            </div>
+            <div class="proposta-actions-sutis">
+                ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito(${p.id})"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
+            </div>
+        </div>
+    `;
+}
+
 function mudarPagina(novaPagina) {
     const lista = obterPropostasFiltradas();
     const totalPaginas = Math.ceil(lista.length / ITENS_POR_PAGINA);
@@ -1069,13 +1154,22 @@ function toggleProposta(id, event) {
     document.querySelectorAll('.proposta-item.expanded').forEach(el => {
         if (el.id !== `proposta-${id}`) {
             el.classList.remove('expanded');
+            const content = el.querySelector('.proposta-content');
+            if (content) content.remove();
         }
     });
     
     if (isExpanded) {
         item.classList.remove('expanded');
+        const content = item.querySelector('.proposta-content');
+        if (content) content.remove();
     } else {
         item.classList.add('expanded');
+        const proposta = propostas.find(p => p.id === id);
+        if (proposta) {
+            const contentHTML = gerarConteudoExpandido(proposta);
+            item.insertAdjacentHTML('beforeend', contentHTML);
+        }
     }
 }
 
