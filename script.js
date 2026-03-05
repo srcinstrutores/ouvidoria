@@ -1,6 +1,9 @@
+const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
 const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
-const URL_OUVIDORIA = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
 const ID_TOPICO_FORUM = '1';
+
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let usuarioAtual = {
     nick: '',
@@ -16,108 +19,11 @@ let abaAtual = 'todos';
 let paginaAtual = 1;
 const ITENS_POR_PAGINA = 10;
 let nickPrincipal = '';
-let propostaOrdemParaVeredito = null;
+let subscriptionPendentes = null;
 
-// FUNÇÃO AJAX COM JSONP PARA BYPASS CORS
-function ajaxJSONP(url, params = {}, timeout = 10000) {
-    return new Promise((resolve, reject) => {
-        const callbackName = 'jsonp_callback_' + Math.round(Math.random() * 1000000);
-        const script = document.createElement('script');
-        const timeoutId = setTimeout(() => {
-            cleanup();
-            reject(new Error('Timeout JSONP'));
-        }, timeout);
-
-        function cleanup() {
-            if (script.parentNode) script.parentNode.removeChild(script);
-            delete window[callbackName];
-            clearTimeout(timeoutId);
-        }
-
-        window[callbackName] = function(data) {
-            cleanup();
-            resolve(data);
-        };
-
-        // Adiciona callback aos parâmetros
-        const allParams = { ...params, callback: callbackName };
-        const queryString = Object.keys(allParams)
-            .map(key => encodeURIComponent(key) + '=' + encodeURIComponent(allParams[key]))
-            .join('&');
-
-        script.src = url + (url.includes('?') ? '&' : '?') + queryString;
-        script.onerror = () => {
-            cleanup();
-            reject(new Error('JSONP failed'));
-        };
-
-        document.head.appendChild(script);
-    });
-}
-
-// POST VIA FORM (não fetch) para evitar CORS preflight
-function postViaForm(url, dados) {
-    return new Promise((resolve, reject) => {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = url;
-        form.target = 'hidden_iframe';
-        form.style.display = 'none';
-
-        // Adiciona campos
-        Object.keys(dados).forEach(key => {
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = key;
-            input.value = dados[key] || '';
-            form.appendChild(input);
-        });
-
-        // Cria iframe invisível para receber resposta
-        let iframe = document.getElementById('hidden_iframe');
-        if (!iframe) {
-            iframe = document.createElement('iframe');
-            iframe.name = 'hidden_iframe';
-            iframe.id = 'hidden_iframe';
-            iframe.style.display = 'none';
-            document.body.appendChild(iframe);
-        }
-
-        // Timeout
-        const timeoutId = setTimeout(() => {
-            reject(new Error('Timeout no envio'));
-        }, 15000);
-
-        // Listener de resposta
-        iframe.onload = function() {
-            clearTimeout(timeoutId);
-            try {
-                // Tenta pegar resposta do iframe
-                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                const responseText = iframeDoc.body.innerText || iframeDoc.body.textContent;
-                
-                try {
-                    const json = JSON.parse(responseText);
-                    resolve(json);
-                } catch (e) {
-                    // Se não for JSON, considera sucesso se não tiver erro óbvio
-                    resolve({ sucesso: true, resposta: responseText });
-                }
-            } catch (e) {
-                // Cross-origin pode bloquear leitura, assume sucesso
-                resolve({ sucesso: true });
-            }
-        };
-
-        document.body.appendChild(form);
-        form.submit();
-        
-        // Remove form após envio
-        setTimeout(() => {
-            if (form.parentNode) form.parentNode.removeChild(form);
-        }, 100);
-    });
-}
+// ==========================================
+// AUTENTICAÇÃO E PERMISSÕES
+// ==========================================
 
 async function pegarUsernameForum() {
     try {
@@ -131,7 +37,7 @@ async function pegarUsernameForum() {
             localStorage.setItem("forumUser", username);
             return username;
         }
-        throw new Error('Não autenticado');
+        throw new Error('Não autenticado no fórum');
     } catch (err) {
         const fallback = localStorage.getItem("forumUser");
         if (fallback) return fallback;
@@ -142,8 +48,8 @@ async function pegarUsernameForum() {
 
 async function buscarCargoPlanilha(nick) {
     try {
-        // Usa JSONP para bypass CORS
-        const dados = await ajaxJSONP(URL_MEMBROS, {});
+        const response = await fetch(URL_MEMBROS);
+        const dados = await response.json();
         const listaUsuarios = dados.membros || [];
         
         const usuario = listaUsuarios.find(p => 
@@ -189,6 +95,7 @@ async function inicializarSistema() {
         
         await carregarPropostas();
         await carregarLogs();
+        iniciarRealtimePendentes();
         
         const firstNick = document.querySelector('.nick-input');
         if (firstNick) {
@@ -209,144 +116,155 @@ async function inicializarSistema() {
 }
 
 function verificarPermissoesUI() {
-    const elementosParaRemover = [
-        '#btnPendentes',
-        'button[onclick="toggleAtualizacao()"]',
-        'button[onclick="toggleLog()"]',
-        '#badgePendentes',
-        '#pendentesPanel',
-        '#atualizacaoPanel', 
-        '#logPanel'
-    ];
+    // Remove elementos do DOM completamente ao invés de apenas esconder
+    const btnPendentes = document.getElementById('btnPendentes');
+    if (btnPendentes && !usuarioAtual.podeAdministrar) {
+        btnPendentes.remove();
+    }
 
-    elementosParaRemover.forEach(seletor => {
-        const el = document.querySelector(seletor);
-        if (el && !usuarioAtual.podeAdministrar) {
-            el.remove();
-        }
-    });
+    const btnAtualizar = document.querySelector('button[onclick="toggleAtualizacao()"]');
+    if (btnAtualizar && !usuarioAtual.podeAdministrar) {
+        btnAtualizar.remove();
+    }
 
+    const btnLog = document.querySelector('button[onclick="toggleLog()"]');
+    if (btnLog && !usuarioAtual.podeAdministrar) {
+        btnLog.remove();
+    }
+
+    const badge = document.getElementById('badgePendentes');
+    if (badge && !usuarioAtual.podeAdministrar) {
+        badge.remove();
+    }
+
+    // Se não for admin, remove os painéis administrativos do DOM
     if (!usuarioAtual.podeAdministrar) {
-        document.querySelectorAll('.veredito-dropdown').forEach(el => {
-            el.style.display = 'none';
-        });
+        const pendentesPanel = document.getElementById('pendentesPanel');
+        if (pendentesPanel) pendentesPanel.remove();
+        
+        const atualizacaoPanel = document.getElementById('atualizacaoPanel');
+        if (atualizacaoPanel) atualizacaoPanel.remove();
+        
+        const logPanel = document.getElementById('logPanel');
+        if (logPanel) logPanel.remove();
     }
 }
 
-// GET PROPOSTAS VIA JSONP
+// ==========================================
+// SUPABASE - OPERAÇÕES COM PROPOSTAS
+// ==========================================
+
 async function carregarPropostas() {
     try {
-        const dados = await ajaxJSONP(URL_OUVIDORIA, { action: 'getPropostas' });
-        
-        propostas = (dados.propostas || []).map(p => ({
-            ordem: String(p.ordem),
+        const { data, error } = await supabaseClient
+            .from('propostas_ouvidoria')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        propostas = (data || []).map(p => ({
+            id: p.id,
             nick: p.nick,
-            tema: p.tema || 'Sem tema',
+            ordem: p.ordem,
+            tema: p.tema || '',
             descricao: p.descricao || '',
             bbcode: p.bbcode || '',
-            tipo: p.tipo || 'Projeto',
             veredito: p.veredito || 'Pendente',
-            data: p.data || formatarData(),
-            criadoPor: p.criadoPor || p.nick,
-            timestamp: p.timestamp || new Date().toISOString(),
-            isAtualizacaoSimples: String(p.ordem) === 'UPD' || p.tipo === 'Atualização'
+            isAtualizacaoSimples: p.is_atualizacao || false,
+            tagAtualizacao: p.tag_atualizacao || '',
+            data: formatarDataISO(p.created_at)
         }));
-
-        propostas.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
         atualizarBadgePendentes();
         renderizarPropostas();
         
     } catch (err) {
-        console.error('Erro ao carregar propostas:', err);
         showToast('Erro', 'Falha ao carregar propostas', 'error');
     }
 }
 
-// POST PROPOSTA VIA FORM (evita CORS preflight)
-async function salvarPropostaPlanilha(proposta) {
+async function salvarPropostaSupabase(proposta) {
     try {
-        const dados = {
-            acao: 'criarProposta',
-            ordem: proposta.ordem,
-            nick: proposta.nick,
-            tipo: proposta.tipo,
-            tema: proposta.tema,
-            descricao: proposta.descricao,
-            bbcode: proposta.bbcode || '',
-            veredito: 'Pendente',
-            data: proposta.data,
-            criadoPor: usuarioAtual.nick,
-            timestamp: new Date().toISOString()
-        };
+        const { data, error } = await supabaseClient
+            .from('propostas_ouvidoria')
+            .insert([{
+                nick: proposta.nick,
+                ordem: proposta.ordem,
+                tema: proposta.tema,
+                descricao: proposta.descricao,
+                bbcode: proposta.bbcode || '',
+                veredito: 'Pendente',
+                is_atualizacao: proposta.isAtualizacaoSimples || false,
+                tag_atualizacao: proposta.tagAtualizacao || null
+            }])
+            .select();
 
-        // Usa POST via form em vez de fetch
-        const resultado = await postViaForm(URL_OUVIDORIA, dados);
-        return resultado;
+        if (error) throw error;
+        return data[0];
         
     } catch (err) {
-        console.error('Erro ao salvar:', err);
         throw err;
     }
 }
 
-// ATUALIZAR VEREDITO VIA FORM
-async function atualizarVereditoPlanilha(ordem, novoVeredito) {
+async function atualizarVereditoSupabase(id, novoVeredito) {
     try {
-        const dados = {
-            acao: 'atualizarVeredito',
-            ordem: ordem,
-            veredito: novoVeredito,
-            atualizadoPor: usuarioAtual.nick,
-            timestampAtualizacao: new Date().toISOString()
-        };
+        const { error } = await supabaseClient
+            .from('propostas_ouvidoria')
+            .update({ veredito: novoVeredito })
+            .eq('id', id);
 
-        const resultado = await postViaForm(URL_OUVIDORIA, dados);
+        if (error) throw error;
         
-        if (resultado.sucesso) {
-            await inserirLog('ALTERAR_VEREDITO', `Alterou veredito da ordem #${ordem} para ${novoVeredito}`);
-        }
-        
-        return resultado;
+        await inserirLog('ALTERAR_VEREDITO', `Alterou veredito para ${novoVeredito}`, id);
         
     } catch (err) {
-        console.error('Erro ao atualizar veredito:', err);
         throw err;
     }
 }
 
-// LOG VIA FORM
-async function inserirLog(acao, detalhes) {
-    try {
-        const dados = {
-            acao: 'inserirLog',
-            tipoAcao: acao,
-            detalhes: detalhes,
-            usuario: usuarioAtual.nick,
-            tag: usuarioAtual.cargo,
-            timestamp: new Date().toISOString()
-        };
+// ==========================================
+// SUPABASE - LOGS
+// ==========================================
 
-        await postViaForm(URL_OUVIDORIA, dados);
+async function inserirLog(acao, detalhes, propostaId = null) {
+    try {
+        await supabaseClient
+            .from('logs_ouvidoria')
+            .insert([{
+                acao: acao,
+                detalhes: detalhes,
+                proposta_id: propostaId,
+                usuario: usuarioAtual.nick,
+                tag: usuarioAtual.cargo,
+                ip_address: null
+            }]);
     } catch (err) {
         console.error('Erro ao inserir log:', err);
     }
 }
 
-// GET LOGS VIA JSONP
 async function carregarLogs() {
     if (!usuarioAtual.podeAdministrar) return;
     
     try {
-        const dados = await ajaxJSONP(URL_OUVIDORIA, { action: 'getLogs' });
-        
-        logAcoes = (dados.logs || []).map(l => ({
-            id: l.id || Date.now() + Math.random(),
-            acao: l.acao || l.tipoAcao,
+        const { data, error } = await supabaseClient
+            .from('logs_ouvidoria')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
+
+        logAcoes = (data || []).map(l => ({
+            id: l.id,
+            acao: l.acao,
             detalhes: l.detalhes,
+            propostaId: l.proposta_id,
             usuario: l.usuario,
             tag: l.tag,
-            data: formatarDataISO(l.timestamp || l.data)
+            data: formatarDataISO(l.created_at)
         }));
 
         renderizarLog();
@@ -356,45 +274,54 @@ async function carregarLogs() {
     }
 }
 
-// POST FÓRUM (mantém igual, funciona no mesmo domínio)
+// ==========================================
+// FÓRUM - POSTAGEM (mantido como estava)
+// ==========================================
+
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
-        async function fazerPostagem() {
-            try {
-                const formData = new FormData();
-                formData.append('t', idTopico);
-                formData.append('mode', 'reply');
-                formData.append('subject', titulo);
-                formData.append('message', mensagem);
-                formData.append('post', 'Enviar');
+        function fazerPostagem() {
+            const formData = new FormData();
+            formData.append('t', idTopico);
+            formData.append('mode', 'reply');
+            formData.append('subject', titulo);
+            formData.append('message', mensagem);
+            formData.append('post', 'Enviar');
 
-                const response = await fetch('/post', {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'same-origin'
-                });
-
-                if (response.ok || response.status === 302) {
-                    resolve({ sucesso: true });
-                } else {
-                    reject(new Error('HTTP ' + response.status));
+            $.ajax({
+                url: '/post',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                success: function(response) {
+                    resolve(response);
+                },
+                error: function(xhr, status, error) {
+                    console.error('Erro AJAX:', status, error, xhr.responseText);
+                    reject(new Error(`Erro na postagem: ${status}`));
                 }
-
-            } catch (err) {
-                reject(err);
-            }
+            });
         }
 
-        fazerPostagem();
+        if (typeof $ === 'undefined') {
+            const script = document.createElement('script');
+            script.src = 'https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js';
+            script.onload = () => fazerPostagem();
+            script.onerror = () => reject(new Error('Falha ao carregar jQuery'));
+            document.head.appendChild(script);
+        } else {
+            fazerPostagem();
+        }
     });
 }
 
 function gerarBBCodeForum(proposta) {
-    const checkboxProjeto = proposta.tipo === 'Projeto' ? '☑' : '☐';
-    const checkboxSugestao = proposta.tipo === 'Sugestão' ? '☑' : '☐';
-    const checkboxAlteracao = proposta.tipo === 'Correção/Alteração' ? '☑' : '☐';
+    const checkboxProjeto = proposta.tipo === 'Projeto' ? '(X)' : '(  )';
+    const checkboxSugestao = proposta.tipo === 'Sugestão' ? '(X)' : '(  )';
+    const checkboxAlteracao = proposta.tipo === 'Correção/Alteração' ? '(X)' : '(  )';
     
-    const bbcodeSpoiler = proposta.bbcode ? `[spoiler="BBCode"]${proposta.bbcode}[/spoiler]` : '';
+    const bbcodeSpoiler = proposta.bbcode ? `[spoiler=BBCode]${proposta.bbcode}[/spoiler]` : '';
     
     return `[b]Nick:[/b] ${proposta.nick}
 [b]Número de ordem:[/b] ${proposta.ordem}
@@ -404,6 +331,10 @@ ${checkboxProjeto} Projeto ${checkboxSugestao} Sugestão ${checkboxAlteracao} Al
 
 ${bbcodeSpoiler}`;
 }
+
+// ==========================================
+// FORMULÁRIO E UI
+// ==========================================
 
 function toggleForm() {
     const form = document.getElementById('formContainer');
@@ -468,12 +399,16 @@ function obterTodosNicks() {
 function gerarProximaOrdem() {
     if (propostas.length === 0) return '001';
     const ordens = propostas
-        .filter(p => !p.isAtualizacaoSimples && p.ordem !== 'UPD')
+        .filter(p => !p.isAtualizacaoSimples)
         .map(p => parseInt(p.ordem))
         .filter(o => !isNaN(o));
     const maxOrdem = Math.max(...ordens, 0);
     return String(maxOrdem + 1).padStart(3, '0');
 }
+
+// ==========================================
+// ENVIO DE PROPOSTAS
+// ==========================================
 
 async function enviarProposta() {
     const nicks = obterTodosNicks();
@@ -493,39 +428,37 @@ async function enviarProposta() {
     }
 
     const novaProposta = {
-        ordem: ordem,
+        id: Date.now(),
         nick: nicks,
         tipo: tipoSelecionado,
+        ordem: ordem,
         tema: tema,
         descricao: descricao,
+        descricaoFormatada: descricao,
         bbcode: bbcode || '',
         data: formatarData(),
-        veredito: 'Pendente'
+        veredito: 'Pendente',
+        isAtualizacaoSimples: false
     };
 
     try {
-        showToast('Enviando', 'Salvando na planilha...', 'info');
+        showToast('Enviando', 'Salvando proposta...', 'info');
         
-        // Salva via form POST (evita CORS)
-        await salvarPropostaPlanilha(novaProposta);
+        await salvarPropostaSupabase(novaProposta);
         
-        // Posta no fórum
         showToast('Enviando', 'Postando no fórum...', 'info');
         const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
         const mensagemForum = gerarBBCodeForum(novaProposta);
         
         try {
             await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
-            showToast('Sucesso', 'Postagem realizada!', 'success');
+            showToast('Sucesso', 'Postagem no fórum realizada!', 'success');
         } catch (forumErr) {
-            console.error('Erro fórum:', forumErr);
-            showToast('Aviso', 'Proposta salva, mas falha no fórum', 'warning');
+            console.error('Erro ao postar no fórum:', forumErr);
+            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum', 'warning');
         }
         
-        // Log
-        await inserirLog('CRIAR_PROPOSTA', `Criou proposta #${ordem}`);
-        
-        // Limpa formulário
+        // Limpar formulário
         const container = document.getElementById('nicksContainer');
         if (container) {
             container.innerHTML = `
@@ -546,17 +479,21 @@ async function enviarProposta() {
         toggleForm();
         await carregarPropostas();
         
-        showToast('Sucesso', 'Proposta enviada!', 'success');
+        showToast('Sucesso', 'Proposta enviada com sucesso!', 'success');
         
     } catch (err) {
-        console.error('Erro:', err);
-        showToast('Erro', 'Falha ao enviar: ' + err.message, 'error');
+        console.error('Erro ao enviar proposta:', err);
+        showToast('Erro', 'Falha ao enviar proposta: ' + err.message, 'error');
     }
 }
 
+// ==========================================
+// ATUALIZAÇÃO DA OUVIDORIA
+// ==========================================
+
 function toggleAtualizacao() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão', 'error');
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem atualizar a ouvidoria', 'error');
         return;
     }
     
@@ -580,7 +517,7 @@ function toggleAtualizacao() {
 
 async function postarAtualizacao() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão', 'error');
+        showToast('Acesso Negado', 'Sem permissão para esta ação', 'error');
         return;
     }
 
@@ -595,29 +532,33 @@ async function postarAtualizacao() {
         return;
     }
 
-    const atualizacao = {
-        ordem: 'UPD',
+    const atualizacaoSimples = {
+        id: Date.now(),
         nick: nick,
         tipo: 'Atualização',
+        ordem: 'UPD',
         tema: `Atualização de ${tag}`,
         descricao: `Atualização postada por ${tag} ${nick}`,
+        descricaoFormatada: `Atualização postada por <b>${tag}</b> ${nick}`,
         bbcode: '',
         data: formatarData(),
-        veredito: 'Atualização'
+        veredito: 'Atualização',
+        isAtualizacaoSimples: true,
+        tagAtualizacao: tag
     };
 
     try {
-        await salvarPropostaPlanilha(atualizacao);
+        await salvarPropostaSupabase(atualizacaoSimples);
         
-        const bbcode = `[center][table bgcolor="005fb2" style="border-radius: 14px; overflow: hidden; width: 80%;"][tr][td][color=#f8f8ff][img(45px,45px)]https://www.habbo.com.br/habbo-imaging/badge/b09064s43084s50134eda71d18c813ca341e7e285475586bf5.gif[/img]
+        const bbcode = `[center][table bgcolor="005fb2" style="border-radius: 14px; overflow: hidden; width: 80%; box-shadow: 0 1px 2px #f233be;"][tr][td][color=#f8f8ff][img(45px,45px)]https://www.habbo.com.br/habbo-imaging/badge/b09064s43084s50134eda71d18c813ca341e7e285475586bf5.gif[/img]
 
 [size=13][font=Poppins][b][SRC] Atualização realizada! ${tag}[/size]
 
-[size=11]Foi realizada uma atualização neste horário.[/b][/font][/size][/color][/td][/tr][/table][/center]`;
+[size=11]Foi realizada uma atualização neste horário, em caso de erros, consulte um membro da Liderança.[/b][/font][/size][/color][/td][/tr][/table][/center]`;
 
         await postarNoForum(ID_TOPICO_FORUM, `[Ouvidoria] Atualização - ${new Date().toLocaleDateString('pt-BR')}`, bbcode);
         
-        await inserirLog('ATUALIZACAO_OUVIDORIA', `Postou atualização como ${tag}`);
+        await inserirLog('ATUALIZACAO_OUVIDORIA', `Postou atualização como ${tag} ${nick}`);
         
         toggleAtualizacao();
         await carregarPropostas();
@@ -625,79 +566,30 @@ async function postarAtualizacao() {
         showToast('Sucesso', 'Atualização postada!', 'success');
         
     } catch (err) {
-        console.error('Erro:', err);
+        console.error('Erro ao postar atualização:', err);
         showToast('Erro', 'Falha ao postar atualização', 'error');
     }
 }
 
-function abrirModalVeredito(ordem) {
+// ==========================================
+// VEREDITOS
+// ==========================================
+
+async function alterarVeredito(id, novoVeredito) {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão', 'error');
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
         return;
     }
-    
-    propostaOrdemParaVeredito = ordem;
-    const proposta = propostas.find(p => p.ordem === ordem);
+
+    const proposta = propostas.find(p => p.id === id);
     if (!proposta) return;
-    
-    document.querySelectorAll('.veredito-option-modal').forEach(el => {
-        el.classList.remove('selected');
-        if (el.querySelector('span').textContent === proposta.veredito) {
-            el.classList.add('selected');
-        }
-    });
-    
-    const modal = document.getElementById('vereditoModal');
-    if (modal) modal.classList.add('active');
-}
-
-function fecharModalVeredito(event) {
-    if (event && event.target !== event.currentTarget && !event.target.closest('.modal-close')) return;
-    
-    const modal = document.getElementById('vereditoModal');
-    if (modal) modal.classList.remove('active');
-    propostaOrdemParaVeredito = null;
-}
-
-function selectVereditoModal(element, veredito) {
-    document.querySelectorAll('.veredito-option-modal').forEach(el => el.classList.remove('selected'));
-    element.classList.add('selected');
-}
-
-async function salvarVeredito() {
-    if (!propostaOrdemParaVeredito) return;
-    
-    const selectedOption = document.querySelector('.veredito-option-modal.selected');
-    if (!selectedOption) {
-        showToast('Erro', 'Selecione um veredito', 'error');
-        return;
-    }
-    
-    const novoVeredito = selectedOption.querySelector('span').textContent;
-    
-    try {
-        await alterarVeredito(propostaOrdemParaVeredito, novoVeredito);
-        fecharModalVeredito();
-    } catch (err) {
-        showToast('Erro', 'Falha ao salvar veredito', 'error');
-    }
-}
-
-async function alterarVeredito(ordem, novoVeredito) {
-    if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão', 'error');
-        return;
-    }
 
     try {
-        await atualizarVereditoPlanilha(ordem, novoVeredito);
+        await atualizarVereditoSupabase(id, novoVeredito);
         
-        const proposta = propostas.find(p => p.ordem === ordem);
-        if (proposta) {
-            proposta.veredito = novoVeredito;
-        }
+        proposta.veredito = novoVeredito;
         
-        showToast('Sucesso', `Proposta #${ordem} marcada como ${novoVeredito}`, 'success');
+        showToast('Sucesso', `Proposta #${proposta.ordem} marcada como ${novoVeredito}`, 'success');
         atualizarBadgePendentes();
         renderizarPropostas();
         
@@ -706,15 +598,15 @@ async function alterarVeredito(ordem, novoVeredito) {
     }
 }
 
-function toggleVereditoDropdown(event, ordem) {
+function toggleVereditoDropdown(event, propostaId) {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão', 'error');
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
         return;
     }
     event.stopPropagation();
     
     document.querySelectorAll('.veredito-dropdown').forEach(el => {
-        if (el.dataset.ordem !== ordem) {
+        if (el.dataset.propostaId != propostaId) {
             el.classList.remove('active');
         }
     });
@@ -723,17 +615,21 @@ function toggleVereditoDropdown(event, ordem) {
     if (dropdown) dropdown.classList.toggle('active');
 }
 
-function selecionarVereditoSutil(event, ordem, novoVeredito) {
+function selecionarVereditoSutil(event, propostaId, novoVeredito) {
     event.stopPropagation();
-    alterarVeredito(ordem, novoVeredito);
+    alterarVeredito(propostaId, novoVeredito);
     
     const dropdown = event.currentTarget.closest('.veredito-dropdown');
     if (dropdown) dropdown.classList.remove('active');
 }
 
+// ==========================================
+// PENDENTES E REALTIME
+// ==========================================
+
 function togglePendentes() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão', 'error');
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver pendentes', 'error');
         return;
     }
     
@@ -744,6 +640,30 @@ function togglePendentes() {
     if (panel.classList.contains('active')) {
         renderizarPendentes();
     }
+}
+
+function iniciarRealtimePendentes() {
+    if (!usuarioAtual.podeAdministrar) return;
+    
+    subscriptionPendentes = supabaseClient
+        .channel('propostas-pendentes')
+        .on('postgres_changes', 
+            { 
+                event: '*', 
+                schema: 'public', 
+                table: 'propostas_ouvidoria',
+                filter: 'veredito=eq.Pendente'
+            }, 
+            (payload) => {
+                console.log('Mudança detectada:', payload);
+                carregarPropostas();
+                const pendentesPanel = document.getElementById('pendentesPanel');
+                if (pendentesPanel && pendentesPanel.classList.contains('active')) {
+                    renderizarPendentes();
+                }
+            }
+        )
+        .subscribe();
 }
 
 function renderizarPendentes() {
@@ -784,13 +704,13 @@ function renderizarPendentes() {
                     </div>
                 </div>
                 <div class="pendente-actions">
-                    <button class="btn btn-success btn-sm" onclick="alterarVeredito('${p.ordem}', 'Aprovado')">
+                    <button class="btn btn-success btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado')">
                         <i class="fa-solid fa-check"></i>
                     </button>
-                    <button class="btn btn-warning btn-sm" onclick="alterarVeredito('${p.ordem}', 'Aprovado com alteração')">
+                    <button class="btn btn-warning btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado com alteração')">
                         <i class="fa-solid fa-edit"></i>
                     </button>
-                    <button class="btn btn-danger btn-sm" onclick="alterarVeredito('${p.ordem}', 'Reprovado')">
+                    <button class="btn btn-danger btn-sm" onclick="alterarVeredito(${p.id}, 'Reprovado')">
                         <i class="fa-solid fa-times"></i>
                     </button>
                 </div>
@@ -813,9 +733,13 @@ function atualizarBadgePendentes() {
     }
 }
 
+// ==========================================
+// LOG DE AÇÕES
+// ==========================================
+
 function toggleLog() {
     if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão', 'error');
+        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver o log', 'error');
         return;
     }
     
@@ -879,6 +803,10 @@ function renderizarLog() {
     }).join('');
 }
 
+// ==========================================
+// RENDERIZAÇÃO DE PROPOSTAS
+// ==========================================
+
 function renderizarPropostas() {
     const container = document.getElementById('propostasList');
     const countEl = document.getElementById('countPropostas');
@@ -921,7 +849,7 @@ function renderizarPropostas() {
                         <i class="fa-solid fa-rotate"></i>
                     </div>
                     <div class="atualizacao-conteudo">
-                        <div class="atualizacao-tag-texto">${p.tema.replace('Atualização de ', '')}</div>
+                        <div class="atualizacao-tag-texto">${p.tagAtualizacao}</div>
                         <div class="atualizacao-nick-texto">${p.nick}</div>
                         <div class="atualizacao-data-texto">${p.data}</div>
                     </div>
@@ -929,26 +857,26 @@ function renderizarPropostas() {
             `;
         }
 
-        const avataresHTML = gerarAvataresHTML(p.nick, p.ordem);
+        const avataresHTML = gerarAvataresHTML(p.nick, p.id);
         
         const vereditoDropdownHTML = usuarioAtual.podeAdministrar ? `
-            <div class="veredito-dropdown" data-ordem="${p.ordem}">
-                <div class="veredito-trigger" onclick="toggleVereditoDropdown(event, '${p.ordem}')">
+            <div class="veredito-dropdown" data-proposta-id="${p.id}">
+                <div class="veredito-trigger" onclick="toggleVereditoDropdown(event, ${p.id})">
                     <div class="veredito-dot ${p.veredito.toLowerCase().replace(/\s+/g, '')}"></div>
                     <span>${p.veredito}</span>
                     <i class="fa-solid fa-chevron-down" style="font-size: 10px;"></i>
                 </div>
                 <div class="veredito-menu">
-                    <div class="veredito-option pendente" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Pendente')">
+                    <div class="veredito-option pendente" onclick="selecionarVereditoSutil(event, ${p.id}, 'Pendente')">
                         <i class="fa-solid fa-clock"></i> Pendente
                     </div>
-                    <div class="veredito-option aprovado" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Aprovado')">
+                    <div class="veredito-option aprovado" onclick="selecionarVereditoSutil(event, ${p.id}, 'Aprovado')">
                         <i class="fa-solid fa-check-circle"></i> Aprovado
                     </div>
-                    <div class="veredito-option alteracao" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Aprovado com alteração')">
+                    <div class="veredito-option alteracao" onclick="selecionarVereditoSutil(event, ${p.id}, 'Aprovado com alteração')">
                         <i class="fa-solid fa-edit"></i> Com Alteração
                     </div>
-                    <div class="veredito-option reprovado" onclick="selecionarVereditoSutil(event, '${p.ordem}', 'Reprovado')">
+                    <div class="veredito-option reprovado" onclick="selecionarVereditoSutil(event, ${p.id}, 'Reprovado')">
                         <i class="fa-solid fa-times-circle"></i> Reprovado
                     </div>
                 </div>
@@ -961,7 +889,7 @@ function renderizarPropostas() {
         `;
 
         return `
-            <div class="proposta-item" id="proposta-${p.ordem}">
+            <div class="proposta-item" id="proposta-${p.id}">
                 <div class="proposta-header">
                     ${avataresHTML}
                     <div class="proposta-info">
@@ -972,85 +900,41 @@ function renderizarPropostas() {
                                 <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
                             </span>
                         </div>
-                        <div class="proposta-tema">${p.tema}</div>
                         <div class="proposta-status">
                             ${vereditoDropdownHTML}
                         </div>
                     </div>
-                    <button class="proposta-expand" onclick="toggleProposta('${p.ordem}', event)" title="Expandir/Recolher">
+                    <button class="proposta-expand" onclick="toggleProposta(${p.id}, event)" title="Expandir/Recolher">
                         <i class="fa-solid fa-chevron-down"></i>
                     </button>
+                </div>
+                <div class="proposta-content">
+                    <div class="proposta-detalhes">
+                        <div class="proposta-tema-full">
+                            <i class="fa-solid fa-heading"></i>
+                            <strong>Tema:</strong> ${p.tema}
+                        </div>
+                        <div class="proposta-descricao-full">
+                            <i class="fa-solid fa-align-left"></i>
+                            <strong>Descrição:</strong>
+                            <div class="descricao-texto">${p.descricao}</div>
+                        </div>
+                        ${p.bbcode ? `
+                        <div class="proposta-bbcode">
+                            <i class="fa-solid fa-code"></i>
+                            <strong>BBCode:</strong>
+                            <pre class="bbcode-preview">${p.bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                        </div>
+                        ` : ''}
+                    </div>
+                    <div class="proposta-footer">
+                        <span class="proposta-id">ID: ${p.id}</span>
+                        <span class="proposta-ordem-final">Ordem #${p.ordem}</span>
+                    </div>
                 </div>
             </div>
         `;
     }).join('');
-}
-
-function gerarConteudoExpandido(p) {
-    const bbcodeSection = p.bbcode ? `
-        <div class="detalhe-item-externo" style="grid-column: 1/-1;">
-            <span class="detalhe-label-externo">BBCode</span>
-            <div style="position: relative; margin-top: 8px;">
-                <textarea id="bbcode-text-${p.ordem}" readonly style="width: 100%; min-height: 120px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: var(--text-primary); resize: vertical;">${p.bbcode}</textarea>
-                <button onclick="copiarBBCode('${p.ordem}')" style="position: absolute; top: 8px; right: 8px; background: var(--primary); color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
-                    <i class="fa-solid fa-copy"></i> Copiar
-                </button>
-            </div>
-        </div>
-    ` : '';
-
-    return `
-        <div class="proposta-content">
-            <div class="proposta-detalhes-externo">
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Tema</span>
-                    <span class="detalhe-valor-externo">${p.tema || 'N/A'}</span>
-                </div>
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Tipo</span>
-                    <span class="detalhe-valor-externo">${p.tipo || 'N/A'}</span>
-                </div>
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Ordem</span>
-                    <span class="detalhe-valor-externo">#${p.ordem}</span>
-                </div>
-                <div class="detalhe-item-externo">
-                    <span class="detalhe-label-externo">Status</span>
-                    <span class="detalhe-valor-externo">${p.veredito}</span>
-                </div>
-                ${p.descricao ? `
-                <div class="detalhe-item-externo" style="grid-column: 1/-1;">
-                    <span class="detalhe-label-externo">Descrição</span>
-                    <span class="detalhe-valor-externo" style="white-space: pre-wrap;">${p.descricao}</span>
-                </div>
-                ` : ''}
-                ${bbcodeSection}
-            </div>
-            <div class="proposta-actions-sutis">
-                ${usuarioAtual.podeAdministrar ? `<button class="btn-sutil" onclick="abrirModalVeredito('${p.ordem}')"><i class="fa-solid fa-gavel"></i> Alterar Veredito</button>` : ''}
-            </div>
-        </div>
-    `;
-}
-
-function copiarBBCode(ordem) {
-    const textarea = document.getElementById(`bbcode-text-${ordem}`);
-    if (!textarea) return;
-    
-    textarea.select();
-    textarea.setSelectionRange(0, 99999);
-    
-    try {
-        navigator.clipboard.writeText(textarea.value).then(() => {
-            showToast('Copiado!', 'BBCode copiado', 'success');
-        }).catch(() => {
-            document.execCommand('copy');
-            showToast('Copiado!', 'BBCode copiado', 'success');
-        });
-    } catch (err) {
-        document.execCommand('copy');
-        showToast('Copiado!', 'BBCode copiado', 'success');
-    }
 }
 
 function obterPropostasFiltradas() {
@@ -1063,17 +947,15 @@ function obterPropostasFiltradas() {
     } else if (abaAtual === 'pesquisar') {
         const searchNick = document.getElementById('searchNick')?.value.toLowerCase() || '';
         const searchOrdem = document.getElementById('searchOrdem')?.value.toLowerCase() || '';
-        const searchTema = document.getElementById('searchTema')?.value.toLowerCase() || '';
         
         lista = lista.filter(p => {
             const matchNick = !searchNick || p.nick.toLowerCase().includes(searchNick);
             const matchOrdem = !searchOrdem || p.ordem.toLowerCase().includes(searchOrdem);
-            const matchTema = !searchTema || p.tema.toLowerCase().includes(searchTema);
-            return matchNick && matchOrdem && matchTema;
+            return matchNick && matchOrdem;
         });
     }
     
-    return lista;
+    return lista.sort((a, b) => new Date(b.data) - new Date(a.data));
 }
 
 function renderizarPaginacao(totalItens) {
@@ -1121,48 +1003,45 @@ function mudarPagina(novaPagina) {
     if (tableCard) tableCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function toggleProposta(ordem, event) {
+// ==========================================
+// EXPANSÃO DE PROPOSTAS (CORRIGIDO)
+// ==========================================
+
+function toggleProposta(id, event) {
     if (event) {
+        // Não expande se clicou em botão, dropdown ou avatar
         if (event.target.closest('.btn') || 
             event.target.closest('.veredito-dropdown') || 
-            event.target.closest('.proposta-avatars') ||
-            event.target.closest('.btn-sutil')) {
+            event.target.closest('.proposta-avatars')) {
             return;
         }
     }
     
-    const item = document.getElementById(`proposta-${ordem}`);
+    const item = document.getElementById(`proposta-${id}`);
     if (!item) return;
     
     const isExpanded = item.classList.contains('expanded');
     
+    // Fecha todos os outros primeiro
     document.querySelectorAll('.proposta-item.expanded').forEach(el => {
-        if (el.id !== `proposta-${ordem}`) {
+        if (el.id !== `proposta-${id}`) {
             el.classList.remove('expanded');
-            const content = el.querySelector('.proposta-content');
-            if (content) content.remove();
         }
     });
     
+    // Toggle do atual
     if (isExpanded) {
         item.classList.remove('expanded');
-        const content = item.querySelector('.proposta-content');
-        if (content) content.remove();
     } else {
         item.classList.add('expanded');
-        const proposta = propostas.find(p => p.ordem === ordem);
-        if (proposta) {
-            const contentHTML = gerarConteudoExpandido(proposta);
-            item.insertAdjacentHTML('beforeend', contentHTML);
-        }
     }
 }
 
-function gerarAvataresHTML(nicksString, ordem) {
+function gerarAvataresHTML(nicksString, propostaId) {
     const nicks = nicksString.split(',').map(n => n.trim()).filter(n => n);
     const maxAvataresVisiveis = 3;
     
-    let html = `<div class="proposta-avatars" onclick="abrirModalAutores('${nicksString}', '${ordem}')" title="Clique para ver todos os autores">`;
+    let html = `<div class="proposta-avatars" onclick="abrirModalAutores('${nicksString}', ${propostaId})" title="Clique para ver todos os autores">`;
     
     nicks.slice(0, maxAvataresVisiveis).forEach((nick, index) => {
         const zIndex = maxAvataresVisiveis - index;
@@ -1187,6 +1066,10 @@ function gerarAvataresHTML(nicksString, ordem) {
     html += '</div>';
     return html;
 }
+
+// ==========================================
+// NAVEGAÇÃO E ABAS
+// ==========================================
 
 function mudarAba(aba, btn) {
     abaAtual = aba;
@@ -1213,7 +1096,11 @@ function filtrarPropostas() {
     renderizarPropostas();
 }
 
-function abrirModalAutores(nicksString, ordem) {
+// ==========================================
+// MODAL DE AUTORES
+// ==========================================
+
+function abrirModalAutores(nicksString, propostaId) {
     const modal = document.getElementById('autoresModal');
     const modalBody = document.getElementById('modalBody');
     const modalTitle = document.getElementById('modalTitle');
@@ -1222,7 +1109,7 @@ function abrirModalAutores(nicksString, ordem) {
     if (!modal || !modalBody) return;
     
     const nicks = nicksString.split(',').map(n => n.trim()).filter(n => n);
-    const proposta = propostas.find(p => p.ordem === ordem);
+    const proposta = propostas.find(p => p.id === propostaId);
     
     if (modalTitle) modalTitle.textContent = `Autores - Ordem #${proposta ? proposta.ordem : ''}`;
     if (modalCount) modalCount.innerHTML = `<strong>${nicks.length}</strong> autor${nicks.length !== 1 ? 'es' : ''}`;
@@ -1261,6 +1148,10 @@ function copiarNick(nick) {
         console.error('Erro ao copiar:', err);
     });
 }
+
+// ==========================================
+// UTILITÁRIOS
+// ==========================================
 
 function formatarData() {
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -1312,6 +1203,10 @@ function toggleTema() {
         icon.className = novo === 'dark' ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
     }
 }
+
+// ==========================================
+// EDITOR DE TEXTO
+// ==========================================
 
 function formatText(command) {
     const textarea = document.getElementById('descricaoInput');
@@ -1400,10 +1295,13 @@ function insertAtCursor(text, textareaId) {
     textarea.focus();
 }
 
+// ==========================================
+// EVENT LISTENERS
+// ==========================================
+
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         fecharModalAutores();
-        fecharModalVeredito();
         document.querySelectorAll('.veredito-dropdown').forEach(el => el.classList.remove('active'));
     }
 });
