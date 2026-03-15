@@ -1,6 +1,7 @@
 const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
 const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
+const URL_PROPOSTAS = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
 const ID_TOPICO_FORUM = '1';
 
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -20,10 +21,6 @@ let paginaAtual = 1;
 const ITENS_POR_PAGINA = 10;
 let nickPrincipal = '';
 let subscriptionPendentes = null;
-
-// ==========================================
-// AUTENTICAÇÃO E PERMISSÕES
-// ==========================================
 
 async function pegarUsernameForum() {
     try {
@@ -118,23 +115,31 @@ async function inicializarSistema() {
 function verificarPermissoesUI() {
     // Remove elementos do DOM completamente ao invés de apenas esconder
     const btnPendentes = document.getElementById('btnPendentes');
-    if (btnPendentes && !usuarioAtual.podeAdministrar) {
-        btnPendentes.remove();
+    if (btnPendentes) {
+        if (!usuarioAtual.podeAdministrar) {
+            btnPendentes.remove();
+        }
     }
 
     const btnAtualizar = document.querySelector('button[onclick="toggleAtualizacao()"]');
-    if (btnAtualizar && !usuarioAtual.podeAdministrar) {
-        btnAtualizar.remove();
+    if (btnAtualizar) {
+        if (!usuarioAtual.podeAdministrar) {
+            btnAtualizar.remove();
+        }
     }
 
     const btnLog = document.querySelector('button[onclick="toggleLog()"]');
-    if (btnLog && !usuarioAtual.podeAdministrar) {
-        btnLog.remove();
+    if (btnLog) {
+        if (!usuarioAtual.podeAdministrar) {
+            btnLog.remove();
+        }
     }
 
     const badge = document.getElementById('badgePendentes');
-    if (badge && !usuarioAtual.podeAdministrar) {
-        badge.remove();
+    if (badge) {
+        if (!usuarioAtual.podeAdministrar) {
+            badge.remove();
+        }
     }
 
     // Se não for admin, remove os painéis administrativos do DOM
@@ -149,10 +154,6 @@ function verificarPermissoesUI() {
         if (logPanel) logPanel.remove();
     }
 }
-
-// ==========================================
-// SUPABASE - OPERAÇÕES COM PROPOSTAS
-// ==========================================
 
 async function carregarPropostas() {
     try {
@@ -224,10 +225,6 @@ async function atualizarVereditoSupabase(id, novoVeredito) {
     }
 }
 
-// ==========================================
-// SUPABASE - LOGS
-// ==========================================
-
 async function inserirLog(acao, detalhes, propostaId = null) {
     try {
         await supabaseClient
@@ -274,13 +271,42 @@ async function carregarLogs() {
     }
 }
 
-// ==========================================
-// FÓRUM - POSTAGEM (mantido como estava)
-// ==========================================
+async function enviarParaPlanilha(proposta) {
+    try {
+        const dados = {
+            acao: 'criarProposta',
+            ordem: proposta.ordem,
+            nick: proposta.nick,
+            tipo: proposta.tipo,
+            tema: proposta.tema,
+            descricao: proposta.descricao,
+            bbcode: proposta.bbcode || '',
+            veredito: 'Pendente',
+            data: proposta.data,
+            criadoPor: usuarioAtual.nick
+        };
+
+        const response = await fetch(URL_PROPOSTAS, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(dados),
+            mode: 'no-cors'
+        });
+
+        return { sucesso: true };
+        
+    } catch (err) {
+        console.error('Erro ao enviar para planilha:', err);
+        return { sucesso: false, erro: err.message };
+    }
+}
 
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
         function fazerPostagem() {
+            // Usar FormData em vez de objeto simples para melhor compatibilidade
             const formData = new FormData();
             formData.append('t', idTopico);
             formData.append('mode', 'reply');
@@ -331,10 +357,6 @@ ${checkboxProjeto} Projeto ${checkboxSugestao} Sugestão ${checkboxAlteracao} Al
 
 ${bbcodeSpoiler}`;
 }
-
-// ==========================================
-// FORMULÁRIO E UI
-// ==========================================
 
 function toggleForm() {
     const form = document.getElementById('formContainer');
@@ -406,10 +428,6 @@ function gerarProximaOrdem() {
     return String(maxOrdem + 1).padStart(3, '0');
 }
 
-// ==========================================
-// ENVIO DE PROPOSTAS
-// ==========================================
-
 async function enviarProposta() {
     const nicks = obterTodosNicks();
     const ordemInput = document.getElementById('ordemInput');
@@ -445,6 +463,9 @@ async function enviarProposta() {
         showToast('Enviando', 'Salvando proposta...', 'info');
         
         await salvarPropostaSupabase(novaProposta);
+        
+        showToast('Enviando', 'Enviando para planilha...', 'info');
+        await enviarParaPlanilha(novaProposta);
         
         showToast('Enviando', 'Postando no fórum...', 'info');
         const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
@@ -486,10 +507,6 @@ async function enviarProposta() {
         showToast('Erro', 'Falha ao enviar proposta: ' + err.message, 'error');
     }
 }
-
-// ==========================================
-// ATUALIZAÇÃO DA OUVIDORIA
-// ==========================================
 
 function toggleAtualizacao() {
     if (!usuarioAtual.podeAdministrar) {
@@ -571,10 +588,6 @@ async function postarAtualizacao() {
     }
 }
 
-// ==========================================
-// VEREDITOS
-// ==========================================
-
 async function alterarVeredito(id, novoVeredito) {
     if (!usuarioAtual.podeAdministrar) {
         showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
@@ -622,10 +635,6 @@ function selecionarVereditoSutil(event, propostaId, novoVeredito) {
     const dropdown = event.currentTarget.closest('.veredito-dropdown');
     if (dropdown) dropdown.classList.remove('active');
 }
-
-// ==========================================
-// PENDENTES E REALTIME
-// ==========================================
 
 function togglePendentes() {
     if (!usuarioAtual.podeAdministrar) {
@@ -726,16 +735,13 @@ function atualizarBadgePendentes() {
     const count = propostas.filter(p => p.veredito === 'Pendente' && !p.isAtualizacaoSimples).length;
     badge.textContent = count;
     
+    // Se não houver pendentes ou usuário não for admin, esconde
     if (count === 0 || !usuarioAtual.podeAdministrar) {
         badge.style.display = 'none';
     } else {
         badge.style.display = 'block';
     }
 }
-
-// ==========================================
-// LOG DE AÇÕES
-// ==========================================
 
 function toggleLog() {
     if (!usuarioAtual.podeAdministrar) {
@@ -802,10 +808,6 @@ function renderizarLog() {
         `;
     }).join('');
 }
-
-// ==========================================
-// RENDERIZAÇÃO DE PROPOSTAS
-// ==========================================
 
 function renderizarPropostas() {
     const container = document.getElementById('propostasList');
@@ -888,8 +890,36 @@ function renderizarPropostas() {
             </div>
         `;
 
+        // CORREÇÃO: Conteúdo expandido que será inserido quando clicar
+        const conteudoExpandido = `
+            <div class="proposta-content" style="display: none;">
+                <div class="proposta-detalhes">
+                    <div class="proposta-tema-full">
+                        <i class="fa-solid fa-heading"></i>
+                        <strong>Tema:</strong> ${p.tema}
+                    </div>
+                    <div class="proposta-descricao-full">
+                        <i class="fa-solid fa-align-left"></i>
+                        <strong>Descrição:</strong>
+                        <div class="descricao-texto">${p.descricao}</div>
+                    </div>
+                    ${p.bbcode ? `
+                    <div class="proposta-bbcode">
+                        <i class="fa-solid fa-code"></i>
+                        <strong>BBCode:</strong>
+                        <pre class="bbcode-preview">${p.bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                    </div>
+                    ` : ''}
+                </div>
+                <div class="proposta-footer">
+                    <span class="proposta-id">ID: ${p.id}</span>
+                    <span class="proposta-ordem-final">Ordem #${p.ordem}</span>
+                </div>
+            </div>
+        `;
+
         return `
-            <div class="proposta-item" id="proposta-${p.id}">
+            <div class="proposta-item" id="proposta-${p.id}" data-tema="${p.tema}" data-descricao="${p.descricao}" data-bbcode="${p.bbcode || ''}">
                 <div class="proposta-header">
                     ${avataresHTML}
                     <div class="proposta-info">
@@ -908,33 +938,19 @@ function renderizarPropostas() {
                         <i class="fa-solid fa-chevron-down"></i>
                     </button>
                 </div>
-                <div class="proposta-content">
-                    <div class="proposta-detalhes">
-                        <div class="proposta-tema-full">
-                            <i class="fa-solid fa-heading"></i>
-                            <strong>Tema:</strong> ${p.tema}
-                        </div>
-                        <div class="proposta-descricao-full">
-                            <i class="fa-solid fa-align-left"></i>
-                            <strong>Descrição:</strong>
-                            <div class="descricao-texto">${p.descricao}</div>
-                        </div>
-                        ${p.bbcode ? `
-                        <div class="proposta-bbcode">
-                            <i class="fa-solid fa-code"></i>
-                            <strong>BBCode:</strong>
-                            <pre class="bbcode-preview">${p.bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
-                        </div>
-                        ` : ''}
-                    </div>
-                    <div class="proposta-footer">
-                        <span class="proposta-id">ID: ${p.id}</span>
-                        <span class="proposta-ordem-final">Ordem #${p.ordem}</span>
-                    </div>
-                </div>
+                ${conteudoExpandido}
             </div>
         `;
     }).join('');
+    
+    // Adicionar event listeners para os itens expandidos após renderizar
+    document.querySelectorAll('.proposta-item').forEach(item => {
+        const content = item.querySelector('.proposta-content');
+        if (content) {
+            // Inicialmente escondido
+            content.style.display = 'none';
+        }
+    });
 }
 
 function obterPropostasFiltradas() {
@@ -1003,10 +1019,7 @@ function mudarPagina(novaPagina) {
     if (tableCard) tableCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-// ==========================================
-// EXPANSÃO DE PROPOSTAS (CORRIGIDO)
-// ==========================================
-
+// CORREÇÃO PRINCIPAL: Toggle agora realmente expande e mostra o conteúdo
 function toggleProposta(id, event) {
     if (event) {
         // Não expande se clicou em botão, dropdown ou avatar
@@ -1020,20 +1033,35 @@ function toggleProposta(id, event) {
     const item = document.getElementById(`proposta-${id}`);
     if (!item) return;
     
-    const isExpanded = item.classList.contains('expanded');
+    const content = item.querySelector('.proposta-content');
+    const expandBtn = item.querySelector('.proposta-expand i');
+    
+    if (!content) return;
     
     // Fecha todos os outros primeiro
     document.querySelectorAll('.proposta-item.expanded').forEach(el => {
         if (el.id !== `proposta-${id}`) {
             el.classList.remove('expanded');
+            const otherContent = el.querySelector('.proposta-content');
+            const otherBtn = el.querySelector('.proposta-expand i');
+            if (otherContent) otherContent.style.display = 'none';
+            if (otherBtn) otherBtn.style.transform = 'rotate(0deg)';
         }
     });
     
     // Toggle do atual
+    const isExpanded = item.classList.contains('expanded');
+    
     if (isExpanded) {
+        // Fechar
         item.classList.remove('expanded');
+        content.style.display = 'none';
+        if (expandBtn) expandBtn.style.transform = 'rotate(0deg)';
     } else {
+        // Abrir
         item.classList.add('expanded');
+        content.style.display = 'block';
+        if (expandBtn) expandBtn.style.transform = 'rotate(180deg)';
     }
 }
 
@@ -1067,10 +1095,6 @@ function gerarAvataresHTML(nicksString, propostaId) {
     return html;
 }
 
-// ==========================================
-// NAVEGAÇÃO E ABAS
-// ==========================================
-
 function mudarAba(aba, btn) {
     abaAtual = aba;
     paginaAtual = 1;
@@ -1095,10 +1119,6 @@ function filtrarPropostas() {
     paginaAtual = 1;
     renderizarPropostas();
 }
-
-// ==========================================
-// MODAL DE AUTORES
-// ==========================================
 
 function abrirModalAutores(nicksString, propostaId) {
     const modal = document.getElementById('autoresModal');
@@ -1148,10 +1168,6 @@ function copiarNick(nick) {
         console.error('Erro ao copiar:', err);
     });
 }
-
-// ==========================================
-// UTILITÁRIOS
-// ==========================================
 
 function formatarData() {
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -1203,10 +1219,6 @@ function toggleTema() {
         icon.className = novo === 'dark' ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
     }
 }
-
-// ==========================================
-// EDITOR DE TEXTO
-// ==========================================
 
 function formatText(command) {
     const textarea = document.getElementById('descricaoInput');
@@ -1294,10 +1306,6 @@ function insertAtCursor(text, textareaId) {
     textarea.value = textarea.value.substring(0, start) + text + textarea.value.substring(start);
     textarea.focus();
 }
-
-// ==========================================
-// EVENT LISTENERS
-// ==========================================
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
