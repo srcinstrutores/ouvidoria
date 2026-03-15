@@ -1,7 +1,8 @@
 const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
-const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
-const URL_PROPOSTAS = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
+
+// SUBSTITUA PELA SUA URL DO APPS SCRIPT
+const URL_PLANILHA = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
 const ID_TOPICO_FORUM = '1';
 
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -21,6 +22,8 @@ let paginaAtual = 1;
 const ITENS_POR_PAGINA = 10;
 let nickPrincipal = '';
 let subscriptionPendentes = null;
+
+// ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 
 async function pegarUsernameForum() {
     try {
@@ -45,32 +48,26 @@ async function pegarUsernameForum() {
 
 async function buscarCargoPlanilha(nick) {
     try {
-        const response = await fetch(URL_MEMBROS);
+        // Busca na planilha pelo nick
+        const response = await fetch(`${URL_PLANILHA}?acao=buscarPorNick&nick=${encodeURIComponent(nick)}`);
         const dados = await response.json();
-        const listaUsuarios = dados.membros || [];
         
-        const usuario = listaUsuarios.find(p => 
-            p.nick && p.nick.toLowerCase() === nick.toLowerCase()
-        );
-
-        if (!usuario) {
+        if (dados.sucesso && dados.propostas.length > 0) {
+            // Pega o cargo da primeira proposta encontrada ou define como membro
             return { nick: nick, cargo: 'membro', cargoOriginal: 'Membro' };
         }
-
-        return {
-            nick: usuario.nick,
-            cargo: usuario.cargo,
-            cargoOriginal: usuario.cargoOriginal
-        };
+        return { nick: nick, cargo: 'membro', cargoOriginal: 'Membro' };
     } catch (err) {
         return { nick: nick, cargo: 'membro', cargoOriginal: 'Membro' };
     }
 }
 
 function verificarLideranca(cargo) {
-    const cargosLideranca = ['lider', 'vice-lider', 'Líder', 'Vice-Líder', 'Vice-lider'];
+    const cargosLideranca = ['lider', 'vice-lider', 'Líder', 'Vice-Líder', 'Vice-lider', 'Diretor', 'Gerente'];
     return cargosLideranca.includes(cargo);
 }
+
+// ==================== INICIALIZAÇÃO ====================
 
 async function inicializarSistema() {
     showToast('Carregando', 'Verificando permissões...', 'info');
@@ -113,36 +110,18 @@ async function inicializarSistema() {
 }
 
 function verificarPermissoesUI() {
-    // Remove elementos do DOM completamente ao invés de apenas esconder
     const btnPendentes = document.getElementById('btnPendentes');
-    if (btnPendentes) {
-        if (!usuarioAtual.podeAdministrar) {
-            btnPendentes.remove();
-        }
-    }
+    if (btnPendentes && !usuarioAtual.podeAdministrar) btnPendentes.remove();
 
     const btnAtualizar = document.querySelector('button[onclick="toggleAtualizacao()"]');
-    if (btnAtualizar) {
-        if (!usuarioAtual.podeAdministrar) {
-            btnAtualizar.remove();
-        }
-    }
+    if (btnAtualizar && !usuarioAtual.podeAdministrar) btnAtualizar.remove();
 
     const btnLog = document.querySelector('button[onclick="toggleLog()"]');
-    if (btnLog) {
-        if (!usuarioAtual.podeAdministrar) {
-            btnLog.remove();
-        }
-    }
+    if (btnLog && !usuarioAtual.podeAdministrar) btnLog.remove();
 
     const badge = document.getElementById('badgePendentes');
-    if (badge) {
-        if (!usuarioAtual.podeAdministrar) {
-            badge.remove();
-        }
-    }
+    if (badge && !usuarioAtual.podeAdministrar) badge.remove();
 
-    // Se não for admin, remove os painéis administrativos do DOM
     if (!usuarioAtual.podeAdministrar) {
         const pendentesPanel = document.getElementById('pendentesPanel');
         if (pendentesPanel) pendentesPanel.remove();
@@ -155,33 +134,37 @@ function verificarPermissoesUI() {
     }
 }
 
+// ==================== SUPABASE - OPERAÇÕES PRINCIPAIS ====================
+
 async function carregarPropostas() {
     try {
         const { data, error } = await supabaseClient
             .from('propostas_ouvidoria')
             .select('*')
-            .order('created_at', { ascending: false });
+            .order('data_criacao', { ascending: false });
 
         if (error) throw error;
 
         propostas = (data || []).map(p => ({
             id: p.id,
-            nick: p.nick,
             ordem: p.ordem,
-            tema: p.tema || '',
-            descricao: p.descricao || '',
+            nick: p.nick,
+            tipo: p.tipo,
+            tema: p.tema,
+            descricao: p.descricao,
             bbcode: p.bbcode || '',
             veredito: p.veredito || 'Pendente',
-            isAtualizacaoSimples: p.is_atualizacao || false,
-            tagAtualizacao: p.tag_atualizacao || '',
-            data: formatarDataISO(p.created_at)
+            data: formatarDataISO(p.data_criacao),
+            forumPostado: p.forum_postado,
+            planilhaSync: p.planilha_sync
         }));
 
         atualizarBadgePendentes();
         renderizarPropostas();
         
     } catch (err) {
-        showToast('Erro', 'Falha ao carregar propostas', 'error');
+        showToast('Erro', 'Falha ao carregar propostas do Supabase', 'error');
+        console.error(err);
     }
 }
 
@@ -190,14 +173,16 @@ async function salvarPropostaSupabase(proposta) {
         const { data, error } = await supabaseClient
             .from('propostas_ouvidoria')
             .insert([{
-                nick: proposta.nick,
                 ordem: proposta.ordem,
+                nick: proposta.nick,
+                tipo: proposta.tipo,
                 tema: proposta.tema,
                 descricao: proposta.descricao,
                 bbcode: proposta.bbcode || '',
                 veredito: 'Pendente',
-                is_atualizacao: proposta.isAtualizacaoSimples || false,
-                tag_atualizacao: proposta.tagAtualizacao || null
+                criado_por: usuarioAtual.nick,
+                forum_postado: false,
+                planilha_sync: false
             }])
             .select();
 
@@ -213,7 +198,10 @@ async function atualizarVereditoSupabase(id, novoVeredito) {
     try {
         const { error } = await supabaseClient
             .from('propostas_ouvidoria')
-            .update({ veredito: novoVeredito })
+            .update({ 
+                veredito: novoVeredito,
+                data_atualizacao: new Date().toISOString()
+            })
             .eq('id', id);
 
         if (error) throw error;
@@ -234,8 +222,7 @@ async function inserirLog(acao, detalhes, propostaId = null) {
                 detalhes: detalhes,
                 proposta_id: propostaId,
                 usuario: usuarioAtual.nick,
-                tag: usuarioAtual.cargo,
-                ip_address: null
+                tag: usuarioAtual.cargo
             }]);
     } catch (err) {
         console.error('Erro ao inserir log:', err);
@@ -271,6 +258,8 @@ async function carregarLogs() {
     }
 }
 
+// ==================== PLANILHA (GOOGLE SHEETS) ====================
+
 async function enviarParaPlanilha(proposta) {
     try {
         const dados = {
@@ -286,7 +275,7 @@ async function enviarParaPlanilha(proposta) {
             criadoPor: usuarioAtual.nick
         };
 
-        const response = await fetch(URL_PROPOSTAS, {
+        const response = await fetch(URL_PLANILHA, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -303,10 +292,47 @@ async function enviarParaPlanilha(proposta) {
     }
 }
 
+async function buscarNaPlanilhaPorOrdem(ordem) {
+    try {
+        const response = await fetch(`${URL_PLANILHA}?acao=buscarPorOrdem&ordem=${encodeURIComponent(ordem)}`);
+        const dados = await response.json();
+        return dados;
+    } catch (err) {
+        console.error('Erro ao buscar na planilha:', err);
+        return { sucesso: false, erro: err.message };
+    }
+}
+
+async function atualizarVereditoPlanilha(ordem, novoVeredito) {
+    try {
+        const dados = {
+            acao: 'atualizarVeredito',
+            ordem: ordem,
+            veredito: novoVeredito,
+            atualizadoPor: usuarioAtual.nick
+        };
+
+        const response = await fetch(URL_PLANILHA, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(dados),
+            mode: 'no-cors'
+        });
+
+        return { sucesso: true };
+    } catch (err) {
+        console.error('Erro ao atualizar veredito na planilha:', err);
+        return { sucesso: false };
+    }
+}
+
+// ==================== FÓRUM ====================
+
 async function postarNoForum(idTopico, titulo, mensagem) {
     return new Promise((resolve, reject) => {
         function fazerPostagem() {
-            // Usar FormData em vez de objeto simples para melhor compatibilidade
             const formData = new FormData();
             formData.append('t', idTopico);
             formData.append('mode', 'reply');
@@ -357,6 +383,230 @@ ${checkboxProjeto} Projeto ${checkboxSugestao} Sugestão ${checkboxAlteracao} Al
 
 ${bbcodeSpoiler}`;
 }
+
+// ==================== FUNÇÃO PRINCIPAL: BUSCAR ORDEM E MOSTRAR ====================
+
+async function buscarEExibirOrdem(ordem) {
+    try {
+        showToast('Buscando', `Procurando ordem #${ordem}...`, 'info');
+        
+        // 1. Busca no Supabase
+        const { data: propostaSupabase, error } = await supabaseClient
+            .from('propostas_ouvidoria')
+            .select('*')
+            .eq('ordem', ordem)
+            .single();
+
+        if (error || !propostaSupabase) {
+            showToast('Erro', 'Ordem não encontrada no Supabase', 'error');
+            return null;
+        }
+
+        // 2. Busca na Planilha para dados complementares
+        const dadosPlanilha = await buscarNaPlanilhaPorOrdem(ordem);
+        
+        // 3. Combina os dados (Supabase tem prioridade)
+        const propostaCompleta = {
+            id: propostaSupabase.id,
+            ordem: propostaSupabase.ordem,
+            nick: propostaSupabase.nick,
+            tipo: propostaSupabase.tipo,
+            tema: propostaSupabase.tema,
+            descricao: propostaSupabase.descricao,
+            bbcode: propostaSupabase.bbcode,
+            veredito: propostaSupabase.veredito,
+            data: formatarDataISO(propostaSupabase.data_criacao),
+            // Se tiver na planilha, adiciona info extra
+            planilhaData: dadosPlanilha.sucesso ? dadosPlanilha.proposta : null
+        };
+
+        // 4. Retorna para exibir no HTML
+        exibirPropostaNoHTML(propostaCompleta);
+        return propostaCompleta;
+        
+    } catch (err) {
+        console.error('Erro ao buscar ordem:', err);
+        showToast('Erro', 'Falha ao buscar ordem', 'error');
+        return null;
+    }
+}
+
+function exibirPropostaNoHTML(proposta) {
+    // Atualiza ou cria o elemento no DOM
+    let container = document.getElementById('resultadoBuscaOrdem');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'resultadoBuscaOrdem';
+        container.className = 'resultado-busca';
+        document.body.appendChild(container);
+    }
+
+    container.innerHTML = `
+        <div class="proposta-detalhada">
+            <h3>Ordem #${proposta.ordem}</h3>
+            <div class="proposta-info-grid">
+                <div><strong>Nick:</strong> ${proposta.nick}</div>
+                <div><strong>Tipo:</strong> ${proposta.tipo}</div>
+                <div><strong>Veredito:</strong> <span class="veredito-${proposta.veredito.toLowerCase().replace(/\s/g, '-')}">${proposta.veredito}</span></div>
+                <div><strong>Data:</strong> ${proposta.data}</div>
+            </div>
+            <div class="proposta-tema"><strong>Tema:</strong> ${proposta.tema}</div>
+            <div class="proposta-descricao"><strong>Descrição:</strong><br>${proposta.descricao}</div>
+            ${proposta.bbcode ? `<div class="proposta-bbcode"><strong>BBCode:</strong><pre>${proposta.bbcode}</pre></div>` : ''}
+            ${proposta.planilhaData ? `<div class="proposta-sync"><i class="fa-solid fa-check-circle"></i> Sincronizado com planilha</div>` : ''}
+        </div>
+    `;
+    
+    container.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ==================== ENVIO COMPLETO (SUPABASE + PLANILHA + FÓRUM) ====================
+
+async function enviarProposta() {
+    const nicks = obterTodosNicks();
+    const ordemInput = document.getElementById('ordemInput');
+    const temaInput = document.getElementById('temaInput');
+    const descricaoInput = document.getElementById('descricaoInput');
+    const bbcodeInput = document.getElementById('bbcodeInput');
+    
+    const ordem = ordemInput?.value.trim();
+    const tema = temaInput?.value.trim();
+    const descricao = descricaoInput?.value.trim();
+    const bbcode = bbcodeInput?.value.trim();
+
+    if (!nicks || !ordem || !tema || !descricao) {
+        showToast('Erro', 'Preencha todos os campos obrigatórios', 'error');
+        return;
+    }
+
+    const novaProposta = {
+        ordem: ordem,
+        nick: nicks,
+        tipo: tipoSelecionado,
+        tema: tema,
+        descricao: descricao,
+        bbcode: bbcode || '',
+        data: formatarData(),
+        veredito: 'Pendente'
+    };
+
+    try {
+        showToast('Enviando', 'Salvando no Supabase...', 'info');
+        
+        // 1. Salva no Supabase
+        const supabaseData = await salvarPropostaSupabase(novaProposta);
+        
+        showToast('Enviando', 'Salvando na Planilha...', 'info');
+        
+        // 2. Envia para Planilha
+        await enviarParaPlanilha(novaProposta);
+        
+        showToast('Enviando', 'Postando no Fórum...', 'info');
+        
+        // 3. Posta no Fórum
+        const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
+        const mensagemForum = gerarBBCodeForum(novaProposta);
+        
+        try {
+            await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
+            
+            // Atualiza status no Supabase
+            await supabaseClient
+                .from('propostas_ouvidoria')
+                .update({ forum_postado: true })
+                .eq('id', supabaseData.id);
+                
+            showToast('Sucesso', 'Postagem no fórum realizada!', 'success');
+        } catch (forumErr) {
+            console.error('Erro ao postar no fórum:', forumErr);
+            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum', 'warning');
+        }
+        
+        // 4. Limpa formulário
+        limparFormulario();
+        toggleForm();
+        await carregarPropostas();
+        
+        showToast('Sucesso', 'Proposta enviada com sucesso!', 'success');
+        
+    } catch (err) {
+        console.error('Erro ao enviar proposta:', err);
+        showToast('Erro', 'Falha ao enviar proposta: ' + err.message, 'error');
+    }
+}
+
+function limparFormulario() {
+    const container = document.getElementById('nicksContainer');
+    if (container) {
+        container.innerHTML = `
+            <div class="nick-row">
+                <div class="nick-input-wrapper">
+                    <i class="fa-solid fa-user"></i>
+                    <input type="text" class="nick-input" placeholder="Ex: ???JUKA" oninput="atualizarNickPrincipal(this.value)">
+                </div>
+            </div>
+        `;
+    }
+    
+    const ordemInput = document.getElementById('ordemInput');
+    const temaInput = document.getElementById('temaInput');
+    const descricaoInput = document.getElementById('descricaoInput');
+    const bbcodeInput = document.getElementById('bbcodeInput');
+    
+    if (ordemInput) ordemInput.value = '';
+    if (temaInput) temaInput.value = '';
+    if (descricaoInput) descricaoInput.value = '';
+    if (bbcodeInput) bbcodeInput.value = '';
+    nickPrincipal = '';
+}
+
+// ==================== ATUALIZAÇÃO DE VEREDITO (3 SISTEMAS) ====================
+
+async function alterarVeredito(id, novoVeredito) {
+    if (!usuarioAtual.podeAdministrar) {
+        showToast('Acesso Negado', 'Apenas Líderança pode alterar vereditos', 'error');
+        return;
+    }
+
+    const proposta = propostas.find(p => p.id === id);
+    if (!proposta) return;
+
+    try {
+        // 1. Atualiza no Supabase
+        await atualizarVereditoSupabase(id, novoVeredito);
+        
+        // 2. Atualiza na Planilha
+        await atualizarVereditoPlanilha(proposta.ordem, novoVeredito);
+        
+        // 3. Posta atualização no Fórum
+        const tituloAtualizacao = `[Ouvidoria] Atualização - Proposta #${proposta.ordem}`;
+        const mensagemAtualizacao = `[b]Atualização de Veredito[/b]
+        
+[b]Ordem:[/b] #${proposta.ordem}
+[b]Tema:[/b] ${proposta.tema}
+[b]Nick:[/b] ${proposta.nick}
+[b]Novo Veredito:[/b] ${novoVeredito}
+[b]Atualizado por:[/b] ${usuarioAtual.nick} (${usuarioAtual.cargo})
+[b]Data:[/b] ${formatarData()}`;
+        
+        try {
+            await postarNoForum(ID_TOPICO_FORUM, tituloAtualizacao, mensagemAtualizacao);
+        } catch (forumErr) {
+            console.error('Erro ao postar atualização no fórum:', forumErr);
+        }
+        
+        // Atualiza local
+        proposta.veredito = novoVeredito;
+        showToast('Sucesso', `Proposta #${proposta.ordem} marcada como ${novoVeredito}`, 'success');
+        atualizarBadgePendentes();
+        renderizarPropostas();
+        
+    } catch (err) {
+        showToast('Erro', 'Falha ao alterar veredito', 'error');
+    }
+}
+
+// ==================== FUNÇÕES AUXILIARES ====================
 
 function toggleForm() {
     const form = document.getElementById('formContainer');
@@ -421,393 +671,13 @@ function obterTodosNicks() {
 function gerarProximaOrdem() {
     if (propostas.length === 0) return '001';
     const ordens = propostas
-        .filter(p => !p.isAtualizacaoSimples)
         .map(p => parseInt(p.ordem))
         .filter(o => !isNaN(o));
     const maxOrdem = Math.max(...ordens, 0);
     return String(maxOrdem + 1).padStart(3, '0');
 }
 
-async function enviarProposta() {
-    const nicks = obterTodosNicks();
-    const ordemInput = document.getElementById('ordemInput');
-    const temaInput = document.getElementById('temaInput');
-    const descricaoInput = document.getElementById('descricaoInput');
-    const bbcodeInput = document.getElementById('bbcodeInput');
-    
-    const ordem = ordemInput?.value.trim();
-    const tema = temaInput?.value.trim();
-    const descricao = descricaoInput?.value.trim();
-    const bbcode = bbcodeInput?.value.trim();
-
-    if (!nicks || !ordem || !tema || !descricao) {
-        showToast('Erro', 'Preencha todos os campos obrigatórios', 'error');
-        return;
-    }
-
-    const novaProposta = {
-        id: Date.now(),
-        nick: nicks,
-        tipo: tipoSelecionado,
-        ordem: ordem,
-        tema: tema,
-        descricao: descricao,
-        descricaoFormatada: descricao,
-        bbcode: bbcode || '',
-        data: formatarData(),
-        veredito: 'Pendente',
-        isAtualizacaoSimples: false
-    };
-
-    try {
-        showToast('Enviando', 'Salvando proposta...', 'info');
-        
-        await salvarPropostaSupabase(novaProposta);
-        
-        showToast('Enviando', 'Enviando para planilha...', 'info');
-        await enviarParaPlanilha(novaProposta);
-        
-        showToast('Enviando', 'Postando no fórum...', 'info');
-        const tituloPost = `[Ouvidoria] Proposta #${ordem} - ${tema}`;
-        const mensagemForum = gerarBBCodeForum(novaProposta);
-        
-        try {
-            await postarNoForum(ID_TOPICO_FORUM, tituloPost, mensagemForum);
-            showToast('Sucesso', 'Postagem no fórum realizada!', 'success');
-        } catch (forumErr) {
-            console.error('Erro ao postar no fórum:', forumErr);
-            showToast('Aviso', 'Proposta salva, mas falha ao postar no fórum', 'warning');
-        }
-        
-        // Limpar formulário
-        const container = document.getElementById('nicksContainer');
-        if (container) {
-            container.innerHTML = `
-                <div class="nick-row">
-                    <div class="nick-input-wrapper">
-                        <i class="fa-solid fa-user"></i>
-                        <input type="text" class="nick-input" placeholder="Ex: ???JUKA" oninput="atualizarNickPrincipal(this.value)">
-                    </div>
-                </div>
-            `;
-        }
-        if (ordemInput) ordemInput.value = '';
-        if (temaInput) temaInput.value = '';
-        if (descricaoInput) descricaoInput.value = '';
-        if (bbcodeInput) bbcodeInput.value = '';
-        nickPrincipal = '';
-        
-        toggleForm();
-        await carregarPropostas();
-        
-        showToast('Sucesso', 'Proposta enviada com sucesso!', 'success');
-        
-    } catch (err) {
-        console.error('Erro ao enviar proposta:', err);
-        showToast('Erro', 'Falha ao enviar proposta: ' + err.message, 'error');
-    }
-}
-
-function toggleAtualizacao() {
-    if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem atualizar a ouvidoria', 'error');
-        return;
-    }
-    
-    const panel = document.getElementById('atualizacaoPanel');
-    if (!panel) return;
-    
-    panel.classList.toggle('active');
-    
-    if (panel.classList.contains('active')) {
-        const atualizacaoNick = document.getElementById('atualizacaoNick');
-        const atualizacaoTag = document.getElementById('atualizacaoTag');
-        
-        if (atualizacaoNick) atualizacaoNick.value = usuarioAtual.nick;
-        if (atualizacaoTag) atualizacaoTag.value = '';
-        
-        setTimeout(() => {
-            if (atualizacaoTag) atualizacaoTag.focus();
-        }, 100);
-    }
-}
-
-async function postarAtualizacao() {
-    if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Sem permissão para esta ação', 'error');
-        return;
-    }
-
-    const tagInput = document.getElementById('atualizacaoTag');
-    const nickInput = document.getElementById('atualizacaoNick');
-    
-    const tag = tagInput?.value.trim();
-    const nick = nickInput?.value.trim();
-    
-    if (!tag) {
-        showToast('Erro', 'Digite sua TAG', 'error');
-        return;
-    }
-
-    const atualizacaoSimples = {
-        id: Date.now(),
-        nick: nick,
-        tipo: 'Atualização',
-        ordem: 'UPD',
-        tema: `Atualização de ${tag}`,
-        descricao: `Atualização postada por ${tag} ${nick}`,
-        descricaoFormatada: `Atualização postada por <b>${tag}</b> ${nick}`,
-        bbcode: '',
-        data: formatarData(),
-        veredito: 'Atualização',
-        isAtualizacaoSimples: true,
-        tagAtualizacao: tag
-    };
-
-    try {
-        await salvarPropostaSupabase(atualizacaoSimples);
-        
-        const bbcode = `[center][table bgcolor="005fb2" style="border-radius: 14px; overflow: hidden; width: 80%; box-shadow: 0 1px 2px #f233be;"][tr][td][color=#f8f8ff][img(45px,45px)]https://www.habbo.com.br/habbo-imaging/badge/b09064s43084s50134eda71d18c813ca341e7e285475586bf5.gif[/img]
-
-[size=13][font=Poppins][b][SRC] Atualização realizada! ${tag}[/size]
-
-[size=11]Foi realizada uma atualização neste horário, em caso de erros, consulte um membro da Liderança.[/b][/font][/size][/color][/td][/tr][/table][/center]`;
-
-        await postarNoForum(ID_TOPICO_FORUM, `[Ouvidoria] Atualização - ${new Date().toLocaleDateString('pt-BR')}`, bbcode);
-        
-        await inserirLog('ATUALIZACAO_OUVIDORIA', `Postou atualização como ${tag} ${nick}`);
-        
-        toggleAtualizacao();
-        await carregarPropostas();
-        
-        showToast('Sucesso', 'Atualização postada!', 'success');
-        
-    } catch (err) {
-        console.error('Erro ao postar atualização:', err);
-        showToast('Erro', 'Falha ao postar atualização', 'error');
-    }
-}
-
-async function alterarVeredito(id, novoVeredito) {
-    if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
-        return;
-    }
-
-    const proposta = propostas.find(p => p.id === id);
-    if (!proposta) return;
-
-    try {
-        await atualizarVereditoSupabase(id, novoVeredito);
-        
-        proposta.veredito = novoVeredito;
-        
-        showToast('Sucesso', `Proposta #${proposta.ordem} marcada como ${novoVeredito}`, 'success');
-        atualizarBadgePendentes();
-        renderizarPropostas();
-        
-    } catch (err) {
-        showToast('Erro', 'Falha ao alterar veredito', 'error');
-    }
-}
-
-function toggleVereditoDropdown(event, propostaId) {
-    if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem alterar vereditos', 'error');
-        return;
-    }
-    event.stopPropagation();
-    
-    document.querySelectorAll('.veredito-dropdown').forEach(el => {
-        if (el.dataset.propostaId != propostaId) {
-            el.classList.remove('active');
-        }
-    });
-    
-    const dropdown = event.currentTarget.closest('.veredito-dropdown');
-    if (dropdown) dropdown.classList.toggle('active');
-}
-
-function selecionarVereditoSutil(event, propostaId, novoVeredito) {
-    event.stopPropagation();
-    alterarVeredito(propostaId, novoVeredito);
-    
-    const dropdown = event.currentTarget.closest('.veredito-dropdown');
-    if (dropdown) dropdown.classList.remove('active');
-}
-
-function togglePendentes() {
-    if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver pendentes', 'error');
-        return;
-    }
-    
-    const panel = document.getElementById('pendentesPanel');
-    if (!panel) return;
-    
-    panel.classList.toggle('active');
-    if (panel.classList.contains('active')) {
-        renderizarPendentes();
-    }
-}
-
-function iniciarRealtimePendentes() {
-    if (!usuarioAtual.podeAdministrar) return;
-    
-    subscriptionPendentes = supabaseClient
-        .channel('propostas-pendentes')
-        .on('postgres_changes', 
-            { 
-                event: '*', 
-                schema: 'public', 
-                table: 'propostas_ouvidoria',
-                filter: 'veredito=eq.Pendente'
-            }, 
-            (payload) => {
-                console.log('Mudança detectada:', payload);
-                carregarPropostas();
-                const pendentesPanel = document.getElementById('pendentesPanel');
-                if (pendentesPanel && pendentesPanel.classList.contains('active')) {
-                    renderizarPendentes();
-                }
-            }
-        )
-        .subscribe();
-}
-
-function renderizarPendentes() {
-    const container = document.getElementById('pendentesList');
-    const countEl = document.getElementById('pendentesCount');
-    
-    if (!container || !countEl) return;
-    
-    const pendentes = propostas.filter(p => p.veredito === 'Pendente' && !p.isAtualizacaoSimples);
-    
-    countEl.textContent = pendentes.length;
-    
-    if (pendentes.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <i class="fa-solid fa-check-circle"></i>
-                <p>Não há propostas pendentes</p>
-            </div>
-        `;
-        return;
-    }
-    
-    container.innerHTML = pendentes.map(p => {
-        const primeiroNick = p.nick.split(',')[0].trim();
-        return `
-            <div class="pendente-item">
-                <div class="pendente-info">
-                    <div class="pendente-avatar">
-                        <img src="https://www.habbo.com.br/habbo-imaging/avatarimage?user=${encodeURIComponent(primeiroNick)}&headonly=0&size=b&gesture=sml&direction=2&head_direction=2" 
-                             alt="${primeiroNick}"
-                             onerror="this.src='https://www.habbo.com.br/habbo-imaging/avatarimage?user=habbo&headonly=0&size=b'">
-                    </div>
-                    <div class="pendente-detalhes">
-                        <div class="pendente-tema">Ordem #${p.ordem}</div>
-                        <div class="pendente-meta">
-                            <span><i class="fa-solid fa-user"></i> ${p.nick}</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="pendente-actions">
-                    <button class="btn btn-success btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado')">
-                        <i class="fa-solid fa-check"></i>
-                    </button>
-                    <button class="btn btn-warning btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado com alteração')">
-                        <i class="fa-solid fa-edit"></i>
-                    </button>
-                    <button class="btn btn-danger btn-sm" onclick="alterarVeredito(${p.id}, 'Reprovado')">
-                        <i class="fa-solid fa-times"></i>
-                    </button>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-function atualizarBadgePendentes() {
-    const badge = document.getElementById('badgePendentes');
-    if (!badge) return;
-    
-    const count = propostas.filter(p => p.veredito === 'Pendente' && !p.isAtualizacaoSimples).length;
-    badge.textContent = count;
-    
-    // Se não houver pendentes ou usuário não for admin, esconde
-    if (count === 0 || !usuarioAtual.podeAdministrar) {
-        badge.style.display = 'none';
-    } else {
-        badge.style.display = 'block';
-    }
-}
-
-function toggleLog() {
-    if (!usuarioAtual.podeAdministrar) {
-        showToast('Acesso Negado', 'Apenas Líder e Vice-Líder podem ver o log', 'error');
-        return;
-    }
-    
-    const panel = document.getElementById('logPanel');
-    if (!panel) return;
-    
-    panel.classList.toggle('active');
-    if (panel.classList.contains('active')) {
-        renderizarLog();
-    }
-}
-
-function renderizarLog() {
-    const container = document.getElementById('logList');
-    if (!container) return;
-    
-    if (logAcoes.length === 0) {
-        container.innerHTML = `
-            <div class="log-empty">
-                <i class="fa-solid fa-clipboard-list"></i>
-                <p>Nenhuma ação registrada</p>
-            </div>
-        `;
-        return;
-    }
-
-    container.innerHTML = logAcoes.map(log => {
-        let iconClass = 'update';
-        let icon = 'fa-pen';
-        
-        switch(log.acao) {
-            case 'CRIAR_PROPOSTA':
-                iconClass = 'create';
-                icon = 'fa-plus';
-                break;
-            case 'ALTERAR_VEREDITO':
-                iconClass = 'veredito';
-                icon = 'fa-gavel';
-                break;
-            case 'ATUALIZACAO_OUVIDORIA':
-                iconClass = 'update';
-                icon = 'fa-rotate';
-                break;
-        }
-
-        return `
-            <div class="log-item">
-                <div class="log-icon ${iconClass}">
-                    <i class="fa-solid ${icon}"></i>
-                </div>
-                <div class="log-content">
-                    <div class="log-text">${log.detalhes}</div>
-                    <div class="log-meta">
-                        <span><i class="fa-solid fa-user"></i> ${log.tag} ${log.usuario}</span>
-                        <span>•</span>
-                        <span><i class="fa-regular fa-clock"></i> ${log.data}</span>
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
+// ==================== RENDERIZAÇÃO ====================
 
 function renderizarPropostas() {
     const container = document.getElementById('propostasList');
@@ -829,36 +699,16 @@ function renderizarPropostas() {
     renderizarPaginacao(totalItens);
 
     if (lista.length === 0) {
-        let mensagem = 'Nenhuma proposta encontrada';
-        if (abaAtual === 'meus') mensagem = 'Você ainda não enviou nenhuma proposta';
-        else if (abaAtual === 'pendentes') mensagem = 'Não há propostas pendentes';
-        else if (abaAtual === 'pesquisar') mensagem = 'Nenhuma proposta corresponde à pesquisa';
-        
         container.innerHTML = `
             <div class="empty-state">
                 <i class="fa-solid fa-inbox"></i>
-                <p>${mensagem}</p>
+                <p>Nenhuma proposta encontrada</p>
             </div>
         `;
         return;
     }
 
     container.innerHTML = lista.map(p => {
-        if (p.isAtualizacaoSimples) {
-            return `
-                <div class="atualizacao-item-simples">
-                    <div class="atualizacao-icon">
-                        <i class="fa-solid fa-rotate"></i>
-                    </div>
-                    <div class="atualizacao-conteudo">
-                        <div class="atualizacao-tag-texto">${p.tagAtualizacao}</div>
-                        <div class="atualizacao-nick-texto">${p.nick}</div>
-                        <div class="atualizacao-data-texto">${p.data}</div>
-                    </div>
-                </div>
-            `;
-        }
-
         const avataresHTML = gerarAvataresHTML(p.nick, p.id);
         
         const vereditoDropdownHTML = usuarioAtual.podeAdministrar ? `
@@ -890,34 +740,6 @@ function renderizarPropostas() {
             </div>
         `;
 
-        // CORREÇÃO: Conteúdo expandido que será inserido quando clicar
-        const conteudoExpandido = `
-            <div class="proposta-content" style="display: none;">
-                <div class="proposta-detalhes">
-                    <div class="proposta-tema-full">
-                        <i class="fa-solid fa-heading"></i>
-                        <strong>Tema:</strong> ${p.tema}
-                    </div>
-                    <div class="proposta-descricao-full">
-                        <i class="fa-solid fa-align-left"></i>
-                        <strong>Descrição:</strong>
-                        <div class="descricao-texto">${p.descricao}</div>
-                    </div>
-                    ${p.bbcode ? `
-                    <div class="proposta-bbcode">
-                        <i class="fa-solid fa-code"></i>
-                        <strong>BBCode:</strong>
-                        <pre class="bbcode-preview">${p.bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
-                    </div>
-                    ` : ''}
-                </div>
-                <div class="proposta-footer">
-                    <span class="proposta-id">ID: ${p.id}</span>
-                    <span class="proposta-ordem-final">Ordem #${p.ordem}</span>
-                </div>
-            </div>
-        `;
-
         return `
             <div class="proposta-item" id="proposta-${p.id}" data-tema="${p.tema}" data-descricao="${p.descricao}" data-bbcode="${p.bbcode || ''}">
                 <div class="proposta-header">
@@ -929,6 +751,8 @@ function renderizarPropostas() {
                             <span class="proposta-tipo tipo-projeto">
                                 <i class="fa-solid fa-hashtag"></i> Ordem ${p.ordem}
                             </span>
+                            ${p.planilhaSync ? '<i class="fa-solid fa-table" title="Sincronizado com planilha"></i>' : ''}
+                            ${p.forumPostado ? '<i class="fa-solid fa-comments" title="Postado no fórum"></i>' : ''}
                         </div>
                         <div class="proposta-status">
                             ${vereditoDropdownHTML}
@@ -938,19 +762,33 @@ function renderizarPropostas() {
                         <i class="fa-solid fa-chevron-down"></i>
                     </button>
                 </div>
-                ${conteudoExpandido}
+                <div class="proposta-content" style="display: none;">
+                    <div class="proposta-detalhes">
+                        <div class="proposta-tema-full">
+                            <i class="fa-solid fa-heading"></i>
+                            <strong>Tema:</strong> ${p.tema}
+                        </div>
+                        <div class="proposta-descricao-full">
+                            <i class="fa-solid fa-align-left"></i>
+                            <strong>Descrição:</strong>
+                            <div class="descricao-texto">${p.descricao}</div>
+                        </div>
+                        ${p.bbcode ? `
+                        <div class="proposta-bbcode">
+                            <i class="fa-solid fa-code"></i>
+                            <strong>BBCode:</strong>
+                            <pre class="bbcode-preview">${p.bbcode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                        </div>
+                        ` : ''}
+                    </div>
+                    <div class="proposta-footer">
+                        <span class="proposta-id">ID: ${p.id}</span>
+                        <span class="proposta-ordem-final">Ordem #${p.ordem}</span>
+                    </div>
+                </div>
             </div>
         `;
     }).join('');
-    
-    // Adicionar event listeners para os itens expandidos após renderizar
-    document.querySelectorAll('.proposta-item').forEach(item => {
-        const content = item.querySelector('.proposta-content');
-        if (content) {
-            // Inicialmente escondido
-            content.style.display = 'none';
-        }
-    });
 }
 
 function obterPropostasFiltradas() {
@@ -959,7 +797,7 @@ function obterPropostasFiltradas() {
     if (abaAtual === 'meus') {
         lista = lista.filter(p => p.nick.toLowerCase().includes(usuarioAtual.nick.toLowerCase()));
     } else if (abaAtual === 'pendentes') {
-        lista = lista.filter(p => p.veredito === 'Pendente' && !p.isAtualizacaoSimples);
+        lista = lista.filter(p => p.veredito === 'Pendente');
     } else if (abaAtual === 'pesquisar') {
         const searchNick = document.getElementById('searchNick')?.value.toLowerCase() || '';
         const searchOrdem = document.getElementById('searchOrdem')?.value.toLowerCase() || '';
@@ -1019,10 +857,8 @@ function mudarPagina(novaPagina) {
     if (tableCard) tableCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-// CORREÇÃO PRINCIPAL: Toggle agora realmente expande e mostra o conteúdo
 function toggleProposta(id, event) {
     if (event) {
-        // Não expande se clicou em botão, dropdown ou avatar
         if (event.target.closest('.btn') || 
             event.target.closest('.veredito-dropdown') || 
             event.target.closest('.proposta-avatars')) {
@@ -1038,7 +874,6 @@ function toggleProposta(id, event) {
     
     if (!content) return;
     
-    // Fecha todos os outros primeiro
     document.querySelectorAll('.proposta-item.expanded').forEach(el => {
         if (el.id !== `proposta-${id}`) {
             el.classList.remove('expanded');
@@ -1049,16 +884,13 @@ function toggleProposta(id, event) {
         }
     });
     
-    // Toggle do atual
     const isExpanded = item.classList.contains('expanded');
     
     if (isExpanded) {
-        // Fechar
         item.classList.remove('expanded');
         content.style.display = 'none';
         if (expandBtn) expandBtn.style.transform = 'rotate(0deg)';
     } else {
-        // Abrir
         item.classList.add('expanded');
         content.style.display = 'block';
         if (expandBtn) expandBtn.style.transform = 'rotate(180deg)';
@@ -1169,6 +1001,202 @@ function copiarNick(nick) {
     });
 }
 
+// ==================== PAINEL ADMINISTRATIVO ====================
+
+function togglePendentes() {
+    if (!usuarioAtual.podeAdministrar) {
+        showToast('Acesso Negado', 'Apenas Líderança pode ver pendentes', 'error');
+        return;
+    }
+    
+    const panel = document.getElementById('pendentesPanel');
+    if (!panel) return;
+    
+    panel.classList.toggle('active');
+    if (panel.classList.contains('active')) {
+        renderizarPendentes();
+    }
+}
+
+function renderizarPendentes() {
+    const container = document.getElementById('pendentesList');
+    const countEl = document.getElementById('pendentesCount');
+    
+    if (!container || !countEl) return;
+    
+    const pendentes = propostas.filter(p => p.veredito === 'Pendente');
+    
+    countEl.textContent = pendentes.length;
+    
+    if (pendentes.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fa-solid fa-check-circle"></i>
+                <p>Não há propostas pendentes</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = pendentes.map(p => {
+        const primeiroNick = p.nick.split(',')[0].trim();
+        return `
+            <div class="pendente-item">
+                <div class="pendente-info">
+                    <div class="pendente-avatar">
+                        <img src="https://www.habbo.com.br/habbo-imaging/avatarimage?user=${encodeURIComponent(primeiroNick)}&headonly=0&size=b&gesture=sml&direction=2&head_direction=2" 
+                             alt="${primeiroNick}"
+                             onerror="this.src='https://www.habbo.com.br/habbo-imaging/avatarimage?user=habbo&headonly=0&size=b'">
+                    </div>
+                    <div class="pendente-detalhes">
+                        <div class="pendente-tema">Ordem #${p.ordem}</div>
+                        <div class="pendente-meta">
+                            <span><i class="fa-solid fa-user"></i> ${p.nick}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="pendente-actions">
+                    <button class="btn btn-success btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado')">
+                        <i class="fa-solid fa-check"></i>
+                    </button>
+                    <button class="btn btn-warning btn-sm" onclick="alterarVeredito(${p.id}, 'Aprovado com alteração')">
+                        <i class="fa-solid fa-edit"></i>
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="alterarVeredito(${p.id}, 'Reprovado')">
+                        <i class="fa-solid fa-times"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function atualizarBadgePendentes() {
+    const badge = document.getElementById('badgePendentes');
+    if (!badge) return;
+    
+    const count = propostas.filter(p => p.veredito === 'Pendente').length;
+    badge.textContent = count;
+    badge.style.display = (count === 0 || !usuarioAtual.podeAdministrar) ? 'none' : 'block';
+}
+
+function toggleLog() {
+    if (!usuarioAtual.podeAdministrar) {
+        showToast('Acesso Negado', 'Apenas Líderança pode ver o log', 'error');
+        return;
+    }
+    
+    const panel = document.getElementById('logPanel');
+    if (!panel) return;
+    
+    panel.classList.toggle('active');
+    if (panel.classList.contains('active')) {
+        renderizarLog();
+    }
+}
+
+function renderizarLog() {
+    const container = document.getElementById('logList');
+    if (!container) return;
+    
+    if (logAcoes.length === 0) {
+        container.innerHTML = `
+            <div class="log-empty">
+                <i class="fa-solid fa-clipboard-list"></i>
+                <p>Nenhuma ação registrada</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = logAcoes.map(log => {
+        let iconClass = 'update';
+        let icon = 'fa-pen';
+        
+        switch(log.acao) {
+            case 'CRIAR_PROPOSTA':
+                iconClass = 'create';
+                icon = 'fa-plus';
+                break;
+            case 'ALTERAR_VEREDITO':
+                iconClass = 'veredito';
+                icon = 'fa-gavel';
+                break;
+            case 'ATUALIZACAO_OUVIDORIA':
+                iconClass = 'update';
+                icon = 'fa-rotate';
+                break;
+        }
+
+        return `
+            <div class="log-item">
+                <div class="log-icon ${iconClass}">
+                    <i class="fa-solid ${icon}"></i>
+                </div>
+                <div class="log-content">
+                    <div class="log-text">${log.detalhes}</div>
+                    <div class="log-meta">
+                        <span><i class="fa-solid fa-user"></i> ${log.tag} ${log.usuario}</span>
+                        <span>•</span>
+                        <span><i class="fa-regular fa-clock"></i> ${log.data}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function toggleVereditoDropdown(event, propostaId) {
+    if (!usuarioAtual.podeAdministrar) {
+        showToast('Acesso Negado', 'Sem permissão', 'error');
+        return;
+    }
+    event.stopPropagation();
+    
+    document.querySelectorAll('.veredito-dropdown').forEach(el => {
+        if (el.dataset.propostaId != propostaId) {
+            el.classList.remove('active');
+        }
+    });
+    
+    const dropdown = event.currentTarget.closest('.veredito-dropdown');
+    if (dropdown) dropdown.classList.toggle('active');
+}
+
+function selecionarVereditoSutil(event, propostaId, novoVeredito) {
+    event.stopPropagation();
+    alterarVeredito(propostaId, novoVeredito);
+    
+    const dropdown = event.currentTarget.closest('.veredito-dropdown');
+    if (dropdown) dropdown.classList.remove('active');
+}
+
+function iniciarRealtimePendentes() {
+    if (!usuarioAtual.podeAdministrar) return;
+    
+    subscriptionPendentes = supabaseClient
+        .channel('propostas-pendentes')
+        .on('postgres_changes', 
+            { 
+                event: '*', 
+                schema: 'public', 
+                table: 'propostas_ouvidoria',
+                filter: 'veredito=eq.Pendente'
+            }, 
+            (payload) => {
+                console.log('Mudança detectada:', payload);
+                carregarPropostas();
+                const pendentesPanel = document.getElementById('pendentesPanel');
+                if (pendentesPanel && pendentesPanel.classList.contains('active')) {
+                    renderizarPendentes();
+                }
+            }
+        )
+        .subscribe();
+}
+
+// ==================== UTILITÁRIOS ====================
+
 function formatarData() {
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     const dias = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -1220,92 +1248,7 @@ function toggleTema() {
     }
 }
 
-function formatText(command) {
-    const textarea = document.getElementById('descricaoInput');
-    if (!textarea) return;
-    
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const text = textarea.value;
-    const selected = text.substring(start, end);
-    
-    let replacement = selected;
-    if (command === 'bold') replacement = `<b>${selected || 'negrito'}</b>`;
-    else if (command === 'underline') replacement = `<u>${selected || 'sublinhado'}</u>`;
-    
-    textarea.value = text.substring(0, start) + replacement + text.substring(end);
-    textarea.focus();
-}
-
-function insertSpoiler() {
-    insertAtCursor('<spoiler>texto</spoiler>', 'descricaoInput');
-}
-
-function insertMedia(type) {
-    const url = prompt(`URL da ${type === 'image' ? 'imagem' : 'vídeo'}:`);
-    if (!url) return;
-    const tag = type === 'image' ? `img src="${url}"` : `video src="${url}" controls`;
-    insertAtCursor(`<${tag}>`, 'descricaoInput');
-}
-
-function wrapText(tag) {
-    const textarea = document.getElementById('bbcodeInput');
-    if (!textarea) return;
-    
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const text = textarea.value;
-    const selected = text.substring(start, end) || 'texto';
-    textarea.value = `${text.substring(0, start)}[${tag}]${selected}[/${tag}]${text.substring(end)}`;
-    textarea.focus();
-}
-
-function insertList(type) {
-    const tag = type === 'bullet' ? 'list' : 'olist';
-    insertAtCursor(`[${tag}]\n[*]Item 1\n[*]Item 2\n[/${tag}]`, 'bbcodeInput');
-}
-
-function insertLink() {
-    const url = prompt("URL:");
-    if (url) insertAtCursor(`[url=${url}]link[/url]`, 'bbcodeInput');
-}
-
-function insertImage() {
-    const url = prompt("URL da imagem:");
-    if (url) insertAtCursor(`[img]${url}[/img]`, 'bbcodeInput');
-}
-
-function insertTable() {
-    const cols = parseInt(prompt("Colunas:", "2")) || 2;
-    const rows = parseInt(prompt("Linhas:", "2")) || 2;
-    let table = '[table]\n';
-    for (let i = 0; i < rows; i++) {
-        table += '[tr]';
-        for (let j = 0; j < cols; j++) table += '[td]Célula[/td]';
-        table += '[/tr]\n';
-    }
-    table += '[/table]';
-    insertAtCursor(table, 'bbcodeInput');
-}
-
-function insertColor() {
-    const cor = prompt("Cor (ex: #00529e):", "#00529e");
-    if (cor) wrapText(`color=${cor}`);
-}
-
-function insertSize() {
-    const tamanho = prompt("Tamanho:", "18");
-    if (tamanho) wrapText(`size=${tamanho}`);
-}
-
-function insertAtCursor(text, textareaId) {
-    const textarea = document.getElementById(textareaId);
-    if (!textarea) return;
-    
-    const start = textarea.selectionStart;
-    textarea.value = textarea.value.substring(0, start) + text + textarea.value.substring(start);
-    textarea.focus();
-}
+// ==================== EVENT LISTENERS ====================
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
