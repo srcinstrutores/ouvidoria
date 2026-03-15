@@ -1,8 +1,12 @@
 const SUPABASE_URL = 'https://mhssvjeklhqyauzbvntf.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oc3N2amVrbGhxeWF1emJ2bnRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTQwMDUsImV4cCI6MjA4ODIzMDAwNX0.p8gD3cmLBpiACGwbv8SCA315QV_3CwNdlHWZAFAwc-c';
 
-// URL DO GOOGLE APPS SCRIPT (SUBSTITUA PELA SUA)
-const URL_SCRIPT = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
+// APPS SCRIPT 1 - MEMBROS (Liderança, cargos, etc)
+const URL_MEMBROS = 'https://script.google.com/macros/s/AKfycbzTjAyXc2kuWyv6QoyJwfkHl2NKBWTTudrDScusmL2a2wRERXOYTX3-wFWIW5nIbmiGXg/exec';
+
+// APPS SCRIPT 2 - POSTAGEM E INFORMAÇÕES (Propostas, atualizações, vereditos)
+const URL_PROPOSTAS = 'https://script.google.com/macros/s/AKfycbwjBk9m9_6HLLsrN-2_FJYX8PgvX04ZPXgrjCKPQCru8M4f0reJ8Otuvcp_zZIuG1YR/exec';
+
 const ID_TOPICO_FORUM = '1';
 
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -48,7 +52,8 @@ async function pegarUsernameForum() {
 
 async function buscarCargo(nick) {
     try {
-        const response = await fetch(`${URL_SCRIPT}?acao=listarMembros`);
+        // USA APPS SCRIPT 1 (MEMBROS)
+        const response = await fetch(`${URL_MEMBROS}?acao=listarMembros`);
         const dados = await response.json();
         
         if (dados.sucesso && dados.membros) {
@@ -91,7 +96,6 @@ async function inicializarSistema() {
         await carregarLogs();
         iniciarRealtime();
         
-        // Preenche campos
         const firstNick = document.querySelector('.nick-input');
         if (firstNick) {
             firstNick.value = nick;
@@ -111,14 +115,7 @@ async function inicializarSistema() {
 }
 
 function verificarPermissoesUI() {
-    // Remove botões de admin se não for liderança
-    const elementosAdmin = [
-        'btnPendentes',
-        'badgePendentes',
-        'atualizacaoPanel',
-        'logPanel',
-        'pendentesPanel'
-    ];
+    const elementosAdmin = ['btnPendentes', 'badgePendentes', 'atualizacaoPanel', 'logPanel', 'pendentesPanel'];
     
     elementosAdmin.forEach(id => {
         const el = document.getElementById(id);
@@ -131,7 +128,6 @@ function verificarPermissoesUI() {
         }
     });
 
-    // Esconde botões de atualização e log
     const btnAtualizar = document.querySelector('button[onclick="toggleAtualizacao()"]');
     const btnLog = document.querySelector('button[onclick="toggleLog()"]');
     
@@ -139,7 +135,7 @@ function verificarPermissoesUI() {
     if (btnLog && !usuarioAtual.podeAdministrar) btnLog.style.display = 'none';
 }
 
-// ==================== SUPABASE - OPERAÇÕES ====================
+// ==================== SUPABASE ====================
 
 async function carregarPropostas() {
     try {
@@ -258,7 +254,7 @@ async function carregarLogs() {
     }
 }
 
-// ==================== PLANILHA ====================
+// ==================== APPS SCRIPT 2 (PROPOSTAS) ====================
 
 async function enviarParaPlanilha(dados, isAtualizacao = false) {
     try {
@@ -268,7 +264,8 @@ async function enviarParaPlanilha(dados, isAtualizacao = false) {
             criadoPor: usuarioAtual.nick
         };
 
-        await fetch(URL_SCRIPT, {
+        // USA APPS SCRIPT 2 (PROPOSTAS)
+        await fetch(URL_PROPOSTAS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -284,7 +281,8 @@ async function enviarParaPlanilha(dados, isAtualizacao = false) {
 
 async function atualizarVereditoPlanilha(ordem, novoVeredito) {
     try {
-        await fetch(URL_SCRIPT, {
+        // USA APPS SCRIPT 2 (PROPOSTAS)
+        await fetch(URL_PROPOSTAS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -298,6 +296,16 @@ async function atualizarVereditoPlanilha(ordem, novoVeredito) {
         return { sucesso: true };
     } catch (err) {
         return { sucesso: false };
+    }
+}
+
+async function buscarNaPlanilhaPorOrdem(ordem) {
+    try {
+        // USA APPS SCRIPT 2 (PROPOSTAS)
+        const response = await fetch(`${URL_PROPOSTAS}?acao=buscarPorOrdem&ordem=${encodeURIComponent(ordem)}`);
+        return await response.json();
+    } catch (err) {
+        return { sucesso: false, erro: err.message };
     }
 }
 
@@ -341,7 +349,7 @@ function gerarBBCodeProposta(proposta) {
     const checkboxSugestao = proposta.tipo === 'Sugestão' ? '(X)' : '(  )';
     const checkboxAlteracao = proposta.tipo === 'Correção/Alteração' ? '(X)' : '(  )';
     
-    const bbcodeSpoiler = proposta.bbcode ? `[spoiler="BBCode Original"]${proposta.bbcode}[/spoiler]` : '';
+    const bbcodeSpoiler = proposta.bbcode ? `[spoiler="BBCode"]${proposta.bbcode}[/spoiler]` : '';
     
     return `[b]Nick:[/b] ${proposta.nick}
 [b]Número de ordem:[/b] ${proposta.ordem}
@@ -488,7 +496,6 @@ async function alterarVeredito(id, novoVeredito) {
         await atualizarVereditoSupabase(id, novoVeredito);
         await atualizarVereditoPlanilha(proposta.ordem, novoVeredito);
         
-        // Posta no fórum
         const titulo = `[Ouvidoria] Veredito - Proposta #${proposta.ordem}`;
         const mensagem = `[b]Veredito Alterado[/b]
         
@@ -675,7 +682,6 @@ function renderizarPropostaNormal(p) {
 }
 
 function formatarDescricao(descricao) {
-    // Converte tags HTML de formatação para exibição
     return descricao
         .replace(/<b>(.*?)<\/b>/g, '<strong>$1</strong>')
         .replace(/<u>(.*?)<\/u>/g, '<u>$1</u>')
@@ -845,7 +851,6 @@ function selecionarVeredito(event, propostaId, novoVeredito) {
 // ==================== HELPERS ====================
 
 function gerarProximaOrdem() {
-    // Filtra apenas propostas normais (não atualizações)
     const propostasNormais = propostas.filter(p => !p.isAtualizacao && p.ordem !== 'UPD');
     if (propostasNormais.length === 0) return '001';
     
